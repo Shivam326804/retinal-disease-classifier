@@ -46,7 +46,7 @@ st.markdown("""
 }
 .sub-header{
     text-align:center;
-    color:#666;
+    color:#888;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -74,7 +74,7 @@ def load_model():
     model_path = Path(Config.MODELS_DIR) / Config.MODEL_NAME
 
     if not model_path.exists():
-        st.warning("Model not found. Train model first.")
+        st.error("Model not found. Train model first.")
         return None
 
     try:
@@ -95,11 +95,22 @@ def main():
     st.markdown('<p class="main-header">Retinal Disease AI Classifier</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Deep Learning Based Diabetic Retinopathy Detection</p>', unsafe_allow_html=True)
 
+    st.warning(
+        "This AI tool is for educational and research purposes only. "
+        "It should not be used for medical diagnosis. "
+        "Always consult a medical professional."
+    )
+
     st.session_state.predictor = load_model()
 
     with st.sidebar:
 
         st.title("Navigation")
+
+        st.markdown("### Model Info")
+        st.write(f"Architecture: EfficientNet")
+        st.write(f"Input Size: {Config.IMAGE_SIZE}x{Config.IMAGE_SIZE}")
+        st.write(f"Classes: {Config.NUM_CLASSES}")
 
         page = st.radio(
             "Select Page",
@@ -178,7 +189,7 @@ def show_prediction():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
 
     # preprocess
     preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
@@ -192,8 +203,8 @@ def show_prediction():
 
         st.subheader("Prediction")
 
-        st.metric("Disease", predicted_class)
-        st.metric("Confidence", f"{confidence:.2%}")
+        st.success(f"Prediction: {predicted_class}")
+        st.write(f"Confidence: **{confidence*100:.2f}%**")
 
         prob_dist = (
             st.session_state.predictor
@@ -203,11 +214,13 @@ def show_prediction():
         df = pd.DataFrame(
             list(prob_dist.items()),
             columns=["Disease", "Probability"]
-        ).sort_values("Probability")
+        ).sort_values("Probability", ascending=True)
 
         fig, ax = plt.subplots()
         ax.barh(df["Disease"], df["Probability"])
         ax.set_xlabel("Probability")
+        ax.set_title("Prediction Probability Distribution")
+
         st.pyplot(fig)
 
     # ---------------------------------------------------
@@ -231,9 +244,7 @@ def show_prediction():
 
         heatmap = visualizer.generate_cam(image_array, class_idx)
 
-        # normalize
         heatmap = np.nan_to_num(heatmap)
-
         heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
 
         heatmap = cv2.resize(
@@ -241,10 +252,7 @@ def show_prediction():
             (Config.IMAGE_SIZE, Config.IMAGE_SIZE)
         )
 
-        # FIX FOR OPENCV ERROR
         heatmap_uint8 = (heatmap * 255).astype(np.uint8)
-
-        heatmap_uint8 = np.array(heatmap_uint8)
 
         heatmap_color = cv2.applyColorMap(
             heatmap_uint8,
@@ -259,7 +267,6 @@ def show_prediction():
         heatmap_color = heatmap_color.astype(np.float32) / 255.0
 
         overlay = image_array * 0.6 + heatmap_color * 0.4
-
         overlay = np.clip(overlay, 0, 1)
 
         col1, col2, col3 = st.columns(3)
@@ -268,10 +275,10 @@ def show_prediction():
             st.image(image_array, caption="Original")
 
         with col2:
-            st.image(heatmap_color, caption="GradCAM Heatmap")
+            st.image(heatmap_color, caption="Grad-CAM Heatmap")
 
         with col3:
-            st.image(overlay, caption="Overlay")
+            st.image(overlay, caption="Attention Overlay")
 
     except Exception as e:
 
@@ -280,6 +287,7 @@ def show_prediction():
     st.session_state.history.append(
         {
             "timestamp": pd.Timestamp.now(),
+            "image_name": uploaded_file.name,
             "disease": predicted_class,
             "confidence": confidence
         }
@@ -333,11 +341,14 @@ Retinal Disease Classification System
 
 This system detects diabetic retinopathy using deep learning.
 
-Technologies used:
+Dataset:
+APTOS 2019 Blindness Detection
 
+Technologies Used:
 TensorFlow  
 OpenCV  
-Streamlit
+Streamlit  
+Grad-CAM Explainability
 """)
 
 

@@ -18,6 +18,18 @@ from ..utils.config import Config
 logger = setup_logger(__name__)
 
 
+# ---------------------------------------------------
+# GPU MEMORY FIX (prevents crashes)
+# ---------------------------------------------------
+
+gpus = tf.config.list_physical_devices("GPU")
+for gpu in gpus:
+    try:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    except Exception:
+        pass
+
+
 class Trainer:
     """Handles model training pipeline"""
 
@@ -45,7 +57,7 @@ class Trainer:
         train_dataset: tf.data.Dataset,
         val_dataset: tf.data.Dataset,
         epochs: int,
-        class_weights: Optional[Dict] = None,
+        class_weights: Optional[Dict[int, float]] = None,
         callbacks: Optional[List[tf.keras.callbacks.Callback]] = None,
     ) -> Dict:
 
@@ -135,11 +147,12 @@ class Trainer:
     # SAVE MODEL
     # ---------------------------------------------------
 
-    def save_model(self, model: tf.keras.Model, model_path: str) -> None:
-        """Save trained model"""
+    def save_model(self, model: tf.keras.Model, model_path: Path) -> None:
+
         try:
             model.save(model_path)
             logger.info(f"Model saved to {model_path}")
+
         except Exception as e:
             logger.error(f"Error saving model: {str(e)}")
 
@@ -182,9 +195,10 @@ if __name__ == "__main__":
     # DATA SPLIT
     # ---------------------------------------------------
 
-    X_train, X_temp, y_train, y_temp = train_test_split(
+    X_train, X_temp, y_train, y_temp, labels_train, labels_temp = train_test_split(
         images,
         labels_categorical,
+        labels,
         test_size=0.3,
         stratify=labels,
         random_state=42,
@@ -194,6 +208,7 @@ if __name__ == "__main__":
         X_temp,
         y_temp,
         test_size=0.5,
+        stratify=labels_temp,
         random_state=42,
     )
 
@@ -217,11 +232,12 @@ if __name__ == "__main__":
     # ---------------------------------------------------
 
     train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    train_dataset = train_dataset.shuffle(1000)
+
+    train_dataset = train_dataset.shuffle(buffer_size=2048)
 
     train_dataset = train_dataset.map(
         lambda x, y: (data_augmentation(x, training=True), y),
-        num_parallel_calls=tf.data.AUTOTUNE
+        num_parallel_calls=tf.data.AUTOTUNE,
     )
 
     train_dataset = train_dataset.batch(Config.BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
@@ -236,13 +252,13 @@ if __name__ == "__main__":
     # CLASS WEIGHTS
     # ---------------------------------------------------
 
-    class_weights = compute_class_weight(
+    class_weights_array = compute_class_weight(
         class_weight="balanced",
         classes=np.unique(labels),
-        y=labels
+        y=labels,
     )
 
-    class_weights = dict(enumerate(class_weights))
+    class_weights = {i: float(w) for i, w in enumerate(class_weights_array)}
 
     print("Class weights:", class_weights)
 
@@ -292,6 +308,6 @@ if __name__ == "__main__":
 
     model_path = Path(Config.MODELS_DIR) / "retinal_classifier_efficientnet.keras"
 
-    model.save(model_path)
+    trainer.save_model(model, model_path)
 
     print("\nModel saved to:", model_path)

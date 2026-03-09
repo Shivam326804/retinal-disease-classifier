@@ -30,11 +30,11 @@ class DataPreprocessor:
         logger.info(f"DataPreprocessor initialized with image_size={image_size}")
 
     # ---------------------------------------------------
-    # FUNDUS CROPPING (remove black borders)
+    # FUNDUS CROPPING
     # ---------------------------------------------------
 
     def crop_fundus(self, img: np.ndarray) -> np.ndarray:
-        """Crop circular retina region"""
+        """Remove black borders around retina"""
 
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
@@ -48,25 +48,22 @@ class DataPreprocessor:
         y0, x0 = coords.min(axis=0)
         y1, x1 = coords.max(axis=0)
 
-        cropped = img[y0:y1, x0:x1]
-
-        return cropped
+        return img[y0:y1, x0:x1]
 
     # ---------------------------------------------------
-    # BEN GRAHAM PREPROCESSING (contrast enhancement)
+    # BEN GRAHAM PREPROCESSING
     # ---------------------------------------------------
 
     def ben_graham_preprocess(self, img: np.ndarray, sigma: int = 10) -> np.ndarray:
+        """Enhance retinal vessels"""
 
-        img = cv2.addWeighted(
+        return cv2.addWeighted(
             img,
             4,
             cv2.GaussianBlur(img, (0, 0), sigma),
             -4,
             128,
         )
-
-        return img
 
     # ---------------------------------------------------
     # IMAGE LOADING
@@ -86,16 +83,12 @@ class DataPreprocessor:
                 logger.warning(f"Failed to load image: {image_path}")
                 return None
 
-            # BGR → RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            # Remove black borders
             img = self.crop_fundus(img)
 
-            # Enhance vessels
             img = self.ben_graham_preprocess(img)
 
-            # Resize
             if target_size is not None:
                 h, w = target_size
                 img = cv2.resize(img, (w, h))
@@ -138,7 +131,7 @@ class DataPreprocessor:
             left,
             right,
             cv2.BORDER_CONSTANT,
-            value=(0, 0, 0)
+            value=(0, 0, 0),
         )
 
         return padded
@@ -158,6 +151,7 @@ class DataPreprocessor:
 
         images = []
         labels = []
+
         failed_count = 0
 
         if labels_df is not None:
@@ -167,11 +161,8 @@ class DataPreprocessor:
                 image_id = str(row["id_code"])
                 label = int(row["diagnosis"])
 
-                matches = (
-                    list(images_dir.rglob(f"{image_id}.png")) +
-                    list(images_dir.rglob(f"{image_id}.jpg")) +
-                    list(images_dir.rglob(f"{image_id}.jpeg"))
-                )
+                # SEARCH IMAGE INSIDE SUBFOLDERS
+                matches = list(images_dir.rglob(f"{image_id}.png"))
 
                 if not matches:
                     failed_count += 1
@@ -188,7 +179,7 @@ class DataPreprocessor:
                     failed_count += 1
 
                 if (i + 1) % 200 == 0:
-                    logger.info(f"Processed {i+1} images")
+                    logger.info(f"Processed {i + 1} images")
 
         else:
 
@@ -201,8 +192,8 @@ class DataPreprocessor:
                     if img is not None:
                         images.append(img)
 
-        images_array = np.array(images)
-        labels_array = np.array(labels) if labels else None
+        images_array = np.array(images, dtype=np.float32)
+        labels_array = np.array(labels, dtype=np.int32) if labels else None
 
         logger.info(
             f"Preprocessing complete. Images: {len(images)}, Failed: {failed_count}"
@@ -230,7 +221,7 @@ class DataPreprocessor:
         train_ratio: float = 0.7,
         val_ratio: float = 0.15,
         test_ratio: float = 0.15,
-        random_state: int = 42
+        random_state: int = 42,
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
 
         X_temp, X_test, y_temp, y_test = train_test_split(
@@ -238,7 +229,7 @@ class DataPreprocessor:
             labels,
             test_size=test_ratio,
             random_state=random_state,
-            stratify=labels
+            stratify=labels,
         )
 
         val_ratio_adjusted = val_ratio / (train_ratio + val_ratio)
@@ -248,13 +239,13 @@ class DataPreprocessor:
             y_temp,
             test_size=val_ratio_adjusted,
             random_state=random_state,
-            stratify=y_temp
+            stratify=y_temp,
         )
 
         splits = {
             "train": (X_train, y_train),
             "val": (X_val, y_val),
-            "test": (X_test, y_test)
+            "test": (X_test, y_test),
         }
 
         logger.info(
@@ -275,16 +266,13 @@ class DataPreprocessor:
 
         try:
 
-            images_path = self.processed_data_dir / "images.npy"
-            np.save(images_path, images)
+            np.save(self.processed_data_dir / "images.npy", images)
 
-            logger.info(f"Saved images to {images_path}")
+            logger.info("Saved processed images")
 
             if labels is not None:
-                labels_path = self.processed_data_dir / "labels.npy"
-                np.save(labels_path, labels)
-
-                logger.info(f"Saved labels to {labels_path}")
+                np.save(self.processed_data_dir / "labels.npy", labels)
+                logger.info("Saved labels")
 
         except Exception as e:
             logger.error(f"Error saving processed data: {str(e)}")
@@ -293,24 +281,42 @@ class DataPreprocessor:
     # LOAD DATA
     # ---------------------------------------------------
 
+    def load_processed_data(self):
+
+        try:
+
+            images = np.load(self.processed_data_dir / "images.npy")
+            labels = np.load(self.processed_data_dir / "labels.npy")
+
+            logger.info(
+                f"Loaded data. Images: {images.shape}, Labels: {labels.shape}"
+            )
+
+            return images, labels
+
+        except FileNotFoundError:
+
+            logger.warning("Processed dataset not found")
+
+            return None, None
+
+    # ---------------------------------------------------
+    # STREAMLIT PREPROCESSING
+    # ---------------------------------------------------
+
     def preprocess_image_array(self, image: np.ndarray) -> np.ndarray:
-        """Preprocess image from numpy array (e.g., from PIL)"""
-        # Assume image is RGB numpy array
+
         img = image.copy()
-        
-        # BGR → RGB if needed, but PIL is RGB
-        # Crop fundus
+
         img = self.crop_fundus(img)
-        
-        # Enhance
+
         img = self.ben_graham_preprocess(img)
-        
-        # Resize
+
         img = self._resize_with_padding(img, self.image_size)
-        
+
         if self.normalize:
             img = img.astype(np.float32) / 255.0
-        
+
         return img
 
 
@@ -324,18 +330,10 @@ if __name__ == "__main__":
 
     preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
 
-    images_dir = Path(Config.RAW_DATA_DIR) / "APTOS_2019" / "colored_images"
-    labels_file = Path(Config.RAW_DATA_DIR) / "APTOS_2019" / "train.csv"
-
-    if not images_dir.exists():
-        raise FileNotFoundError(f"Image folder not found: {images_dir}")
-
-    if not labels_file.exists():
-        raise FileNotFoundError(f"Labels CSV not found: {labels_file}")
+    images_dir = Config.IMAGES_DIR
+    labels_file = Config.LABELS_FILE
 
     labels_df = pd.read_csv(labels_file)
-
-    logger.info(f"Loaded labels file with {len(labels_df)} entries")
 
     images, labels = preprocessor.preprocess_dataset(
         images_dir=images_dir,
@@ -343,7 +341,7 @@ if __name__ == "__main__":
         save_processed=True
     )
 
-    logger.info("Preprocessing completed successfully")
+    logger.info("Preprocessing completed")
 
     if images is not None:
         logger.info(f"Processed images: {images.shape}")

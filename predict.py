@@ -3,7 +3,6 @@ Prediction Script
 Makes predictions on new images
 """
 
-import os
 import sys
 import argparse
 import numpy as np
@@ -17,33 +16,54 @@ from src.utils.logger import setup_logger
 from src.utils.config import Config
 from src.preprocessing.data_preprocessor import DataPreprocessor
 from src.inference import Predictor, GradCAMVisualizer
+from src.utils.data_utils import get_image_files, save_image
 
 logger = setup_logger(__name__)
 
 
-def predict_single_image(
-    image_path: str,
-    model_name: str = "baseline_cnn",
-    generate_gradcam: bool = False
-) -> Optional[Dict[str, Any]]:
-    """
-    Predict disease class for a single image
-    """
+# ---------------------------------------------------
+# LOAD MODEL
+# ---------------------------------------------------
 
-    logger.info(f"\nPredicting on image: {image_path}")
+def load_predictor(model_name: Optional[str] = None) -> Optional[Predictor]:
 
-    # Load model
-    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.keras")
-    predictor = Predictor(model_path, Config.DISEASE_CLASSES)
+    if model_name is None:
+        model_name = Config.MODEL_NAME
+
+    model_path = Path(Config.MODELS_DIR) / model_name
+
+    if not model_path.exists():
+        logger.error(f"Model not found: {model_path}")
+        return None
+
+    predictor = Predictor(str(model_path), Config.DISEASE_CLASSES)
 
     if predictor.model is None:
         logger.error("Model failed to load.")
         return None
 
-    # Preprocessor
+    return predictor
+
+
+# ---------------------------------------------------
+# SINGLE IMAGE PREDICTION
+# ---------------------------------------------------
+
+def predict_single_image(
+    image_path: str,
+    model_name: Optional[str] = None,
+    generate_gradcam: bool = False
+) -> Optional[Dict[str, Any]]:
+
+    logger.info(f"\nPredicting image: {image_path}")
+
+    predictor = load_predictor(model_name)
+
+    if predictor is None or predictor.model is None:
+        return None
+
     preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
 
-    # FIX: convert to Path
     image = preprocessor.load_image(
         Path(image_path),
         target_size=(Config.IMAGE_SIZE, Config.IMAGE_SIZE)
@@ -53,26 +73,36 @@ def predict_single_image(
         logger.error(f"Failed to load image: {image_path}")
         return None
 
-    # Predict
     predicted_class, confidence, probabilities = predictor.predict(image)
-
-    logger.info(f"Predicted Disease: {predicted_class}")
-    logger.info(f"Confidence: {confidence:.4f}")
-
-    logger.info("\nConfidence Distribution:")
 
     prob_dist = predictor.get_prediction_confidence_distribution(probabilities)
 
-    for disease, prob in sorted(prob_dist.items(), key=lambda x: x[1], reverse=True):
-        logger.info(f"  {disease}: {prob:.4f}")
+    logger.info(f"Prediction: {predicted_class}")
+    logger.info(f"Confidence: {confidence:.4f}")
 
-    # Grad-CAM
+    logger.info("\nProbability Distribution:")
+
+    for disease, prob in sorted(prob_dist.items(), key=lambda x: x[1], reverse=True):
+        logger.info(f"{disease}: {prob:.4f}")
+
+    # ---------------------------------------------------
+    # GRADCAM
+    # ---------------------------------------------------
+
+    gradcam_path = None
+
     if generate_gradcam:
+
         try:
 
-            logger.info("\nGenerating Grad-CAM visualization...")
+            logger.info("Generating Grad-CAM visualization...")
 
-            visualizer = GradCAMVisualizer(predictor.model)
+            # FIX: Explicit check for model
+            model = predictor.model
+            if model is None:
+                raise ValueError("Predictor model is None")
+
+            visualizer = GradCAMVisualizer(model)
 
             class_idx = int(np.argmax(probabilities))
 
@@ -80,49 +110,46 @@ def predict_single_image(
 
             visualization = visualizer.visualize_with_heatmap(image, heatmap)
 
-            output_path = Path(image_path).stem + "_gradcam.png"
+            gradcam_path = str(Path(image_path).with_name(
+                Path(image_path).stem + "_gradcam.png"
+            ))
 
-            from src.utils.data_utils import save_image
+            save_image(visualization, gradcam_path)
 
-            save_image(visualization, output_path)
-
-            logger.info(f"Grad-CAM visualization saved to {output_path}")
+            logger.info(f"Grad-CAM saved: {gradcam_path}")
 
         except Exception as e:
-            logger.warning(f"Grad-CAM generation failed: {str(e)}")
+            logger.warning(f"Grad-CAM generation failed: {e}")
 
     return {
-        "image": image_path,
-        "predicted_disease": predicted_class,
-        "confidence": confidence,
+        "image_path": image_path,
+        "prediction": predicted_class,
+        "confidence": float(confidence),
         "probabilities": prob_dist,
+        "gradcam": gradcam_path,
     }
 
 
+# ---------------------------------------------------
+# BATCH PREDICTION
+# ---------------------------------------------------
+
 def predict_batch(
     image_dir: str,
-    model_name: str = "baseline_cnn"
+    model_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """
-    Predict on all images in a directory
-    """
 
-    logger.info(f"Batch prediction on directory: {image_dir}")
-
-    from src.utils.data_utils import get_image_files
+    logger.info(f"Running batch prediction on: {image_dir}")
 
     image_files = get_image_files(image_dir)
 
     if not image_files:
-        logger.warning("No images found in directory")
+        logger.warning("No images found in directory.")
         return []
 
-    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.keras")
+    predictor = load_predictor(model_name)
 
-    predictor = Predictor(model_path, Config.DISEASE_CLASSES)
-
-    if predictor.model is None:
-        logger.error("Model failed to load.")
+    if predictor is None or predictor.model is None:
         return []
 
     preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
@@ -139,51 +166,52 @@ def predict_batch(
         if image is None:
             continue
 
-        predicted_class, confidence, _ = predictor.predict(image)
+        predicted_class, confidence, probabilities = predictor.predict(image)
 
         results.append(
             {
                 "image": image_path,
-                "predicted_disease": predicted_class,
-                "confidence": confidence,
+                "prediction": predicted_class,
+                "confidence": float(confidence),
             }
         )
 
-    logger.info(f"Completed batch prediction: {len(results)} images")
+    logger.info(f"Batch prediction completed: {len(results)} images")
 
     return results
 
 
-def main() -> None:
-    """Main prediction function"""
+# ---------------------------------------------------
+# MAIN
+# ---------------------------------------------------
 
-    parser = argparse.ArgumentParser(description="Make predictions on images")
+def main():
+
+    parser = argparse.ArgumentParser(description="Retinal disease prediction")
 
     parser.add_argument(
         "--image",
         type=str,
-        default=None,
-        help="Path to single image for prediction",
+        help="Path to single image"
     )
 
     parser.add_argument(
         "--image-dir",
         type=str,
-        default=None,
-        help="Directory containing images for batch prediction",
+        help="Directory of images"
     )
 
     parser.add_argument(
         "--model",
         type=str,
-        default="baseline_cnn",
-        help="Name of trained model to use",
+        default=None,
+        help="Model filename inside models folder"
     )
 
     parser.add_argument(
         "--gradcam",
         action="store_true",
-        help="Generate Grad-CAM visualization",
+        help="Generate Grad-CAM"
     )
 
     args = parser.parse_args()
@@ -192,13 +220,13 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    # Single prediction
+    # Single image
     if args.image:
 
         predict_single_image(
             args.image,
             args.model,
-            args.gradcam,
+            args.gradcam
         )
 
     # Batch prediction
@@ -206,27 +234,25 @@ def main() -> None:
 
         results = predict_batch(
             args.image_dir,
-            args.model,
+            args.model
         )
 
         if results:
 
-            logger.info("\n" + "=" * 60)
-            logger.info("Batch Prediction Summary")
-            logger.info("=" * 60)
+            logger.info("\nBatch Prediction Summary\n")
 
-            for result in results[:10]:
+            for r in results[:10]:
 
                 logger.info(
-                    f"{result['image']}: "
-                    f"{result['predicted_disease']} "
-                    f"({result['confidence']:.4f})"
+                    f"{r['image']} -> "
+                    f"{r['prediction']} "
+                    f"({r['confidence']:.4f})"
                 )
 
             if len(results) > 10:
 
                 logger.info(
-                    f"... and {len(results) - 10} more predictions"
+                    f"... and {len(results) - 10} more images"
                 )
 
 

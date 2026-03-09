@@ -36,10 +36,11 @@ class ImageAugmenter:
 
             A.Rotate(limit=25, p=0.5),
 
-            A.ShiftScaleRotate(
-                shift_limit=0.05,
-                scale_limit=0.1,
-                rotate_limit=20,
+            # Replacement for deprecated ShiftScaleRotate
+            A.Affine(
+                scale=(0.9, 1.1),
+                translate_percent=(0.05, 0.05),
+                rotate=(-20, 20),
                 p=0.5
             ),
 
@@ -62,7 +63,7 @@ class ImageAugmenter:
                 p=0.3
             ),
 
-            # New Albumentations dropout API
+            # Cutout replacement
             A.CoarseDropout(
                 num_holes_range=(1, 4),
                 hole_height_range=(0.05, 0.15),
@@ -183,10 +184,12 @@ class ImageAugmenter:
         augmented_images = []
 
         for img in images:
+
             augmented = transform(image=img)
+
             augmented_images.append(augmented["image"])
 
-        return np.array(augmented_images)
+        return np.array(augmented_images, dtype=np.float32)
 
     # ---------------------------------------------------
     # TEST AUGMENTATION

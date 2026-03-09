@@ -11,53 +11,64 @@ from typing import Optional
 from .config import Config
 
 
-def setup_logger(name: str = __name__, level: Optional[str] = None) -> logging.Logger:
+# ---------------------------------------------------
+# LOGGER SETUP FUNCTION
+# ---------------------------------------------------
+
+def setup_logger(name: str = "retinal_classifier", level: Optional[str] = None) -> logging.Logger:
     """
-    Setup logger with both file and console handlers
+    Setup project logger
 
     Args:
-        name: Logger name
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        name: logger name
+        level: logging level
 
     Returns:
-        Configured logger instance
+        configured logger
     """
 
-    # Use config level if none provided
     if level is None:
         level = Config.LOG_LEVEL
 
-    # Ensure logs directory exists
-    logs_dir: Path = Path(Config.LOGS_DIR)
+    log_level = getattr(logging, level.upper(), logging.INFO)
+
+    # Ensure log directory exists
+    logs_dir = Path(Config.LOGS_DIR)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create logger
     logger = logging.getLogger(name)
 
-    log_level = getattr(logging, level.upper(), logging.INFO)
-    logger.setLevel(log_level)
-
-    # Prevent duplicate handlers
-    if logger.handlers:
+    # Prevent duplicate handlers (important for Streamlit)
+    if logger.hasHandlers():
         return logger
 
-    # ---------------- FORMATTERS ----------------
+    logger.setLevel(log_level)
+    logger.propagate = False
+
+    # ---------------------------------------------------
+    # FORMATTERS
+    # ---------------------------------------------------
 
     detailed_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
+        "%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    simple_formatter = logging.Formatter("%(levelname)s: %(message)s")
+    console_formatter = logging.Formatter(
+        "%(levelname)s: %(message)s"
+    )
 
-    # ---------------- FILE HANDLER ----------------
+    # ---------------------------------------------------
+    # FILE HANDLER (ROTATING)
+    # ---------------------------------------------------
 
     log_file = logs_dir / f"{name.replace('.', '_')}.log"
 
     file_handler = logging.handlers.RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
+        filename=log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
         backupCount=5,
+        encoding="utf-8"
     )
 
     file_handler.setLevel(logging.DEBUG)
@@ -65,17 +76,21 @@ def setup_logger(name: str = __name__, level: Optional[str] = None) -> logging.L
 
     logger.addHandler(file_handler)
 
-    # ---------------- CONSOLE HANDLER ----------------
+    # ---------------------------------------------------
+    # CONSOLE HANDLER
+    # ---------------------------------------------------
 
     console_handler = logging.StreamHandler()
-
     console_handler.setLevel(log_level)
-    console_handler.setFormatter(simple_formatter)
+    console_handler.setFormatter(console_formatter)
 
     logger.addHandler(console_handler)
 
     return logger
 
 
-# Global application logger
+# ---------------------------------------------------
+# GLOBAL LOGGER
+# ---------------------------------------------------
+
 app_logger = setup_logger("retinal_classifier")

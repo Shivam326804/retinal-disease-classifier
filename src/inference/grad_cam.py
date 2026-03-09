@@ -20,6 +20,8 @@ class GradCAMVisualizer:
     def __init__(self, model: tf.keras.Model, layer_name: Optional[str] = None):
 
         self.model = model
+
+        # Automatically detect last convolution layer
         self.layer_name = layer_name or self._get_last_conv_layer(model)
 
         self.grad_model: Optional[tf.keras.Model] = None
@@ -28,14 +30,23 @@ class GradCAMVisualizer:
 
         logger.info(f"GradCAM initialized for layer: {self.layer_name}")
 
+    # ---------------------------------------------------
+    # FIND LAST CONV LAYER
+    # ---------------------------------------------------
+
     def _get_last_conv_layer(self, model: tf.keras.Model) -> str:
         """Find last convolutional layer automatically"""
 
         for layer in reversed(model.layers):
+
             if isinstance(layer, tf.keras.layers.Conv2D):
                 return layer.name
 
         raise ValueError("No convolution layer found in model")
+
+    # ---------------------------------------------------
+    # BUILD GRAD MODEL
+    # ---------------------------------------------------
 
     def _build_grad_model(self) -> None:
         """Create gradient model"""
@@ -53,6 +64,10 @@ class GradCAMVisualizer:
 
             logger.error(f"Error building gradient model: {str(e)}")
             self.grad_model = None
+
+    # ---------------------------------------------------
+    # GENERATE HEATMAP
+    # ---------------------------------------------------
 
     def generate_cam(self, image: np.ndarray, class_idx: int) -> np.ndarray:
         """Generate Grad-CAM heatmap"""
@@ -75,6 +90,9 @@ class GradCAMVisualizer:
 
             grads = tape.gradient(loss, conv_outputs)
 
+            if grads is None:
+                raise RuntimeError("Gradients returned None")
+
             pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
             conv_outputs = conv_outputs[0]
@@ -87,6 +105,7 @@ class GradCAMVisualizer:
 
             # Normalize heatmap
             max_val = np.max(heatmap)
+
             if max_val > 0:
                 heatmap = heatmap / max_val
 
@@ -96,7 +115,12 @@ class GradCAMVisualizer:
 
             logger.error(f"Grad-CAM generation failed: {str(e)}")
 
+            # fallback safe heatmap
             return np.zeros((image.shape[1], image.shape[2]), dtype=np.float32)
+
+    # ---------------------------------------------------
+    # OVERLAY HEATMAP
+    # ---------------------------------------------------
 
     def visualize_with_heatmap(
         self,
@@ -144,6 +168,10 @@ class GradCAMVisualizer:
             logger.error(f"Grad-CAM overlay failed: {str(e)}")
 
             return image
+
+    # ---------------------------------------------------
+    # PLOT RESULTS
+    # ---------------------------------------------------
 
     @staticmethod
     def plot_gradcam(

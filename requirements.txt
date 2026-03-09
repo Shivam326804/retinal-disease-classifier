@@ -1,0 +1,47 @@
+# Core Dependencies
+numpy==1.24.3
+pandas==2.0.3
+scikit-learn==1.3.0
+scipy==1.11.2
+
+# Deep Learning
+tensorflow==2.13.0
+keras==2.13.0
+torch==2.0.1
+torchvision==0.15.2
+
+# Computer Vision
+opencv-python==4.8.0.76
+albumentations==1.3.0
+Pillow==10.0.0
+
+# Visualization
+matplotlib==3.7.2
+seaborn==0.12.2
+tensorboard==2.13.0
+
+# Web & API
+fastapi==0.103.0
+uvicorn==0.23.2
+streamlit==1.28.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.20
+# sqlite3 is part of the Python standard library, no external package required
+
+# Utilities
+python-dotenv==1.0.0
+pyyaml==6.0.1
+tqdm==4.66.1
+requests==2.31.0
+
+# Development & Testing
+pytest==7.4.0
+pytest-cov==4.1.0
+black==23.9.1
+flake8==6.1.0
+mypy==1.5.1
+
+# ML Explainability
+grad-cam==1.4.8

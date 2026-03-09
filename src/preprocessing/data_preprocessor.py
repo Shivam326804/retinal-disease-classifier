@@ -293,26 +293,25 @@ class DataPreprocessor:
     # LOAD DATA
     # ---------------------------------------------------
 
-    def load_processed_data(self):
-
-        try:
-
-            images_path = self.processed_data_dir / "images.npy"
-            labels_path = self.processed_data_dir / "labels.npy"
-
-            images = np.load(images_path)
-            labels = np.load(labels_path)
-
-            logger.info(
-                f"Loaded data. Images: {images.shape}, Labels: {labels.shape}"
-            )
-
-            return images, labels
-
-        except FileNotFoundError:
-
-            logger.warning("Processed data not found.")
-            return None, None
+    def preprocess_image_array(self, image: np.ndarray) -> np.ndarray:
+        """Preprocess image from numpy array (e.g., from PIL)"""
+        # Assume image is RGB numpy array
+        img = image.copy()
+        
+        # BGR → RGB if needed, but PIL is RGB
+        # Crop fundus
+        img = self.crop_fundus(img)
+        
+        # Enhance
+        img = self.ben_graham_preprocess(img)
+        
+        # Resize
+        img = self._resize_with_padding(img, self.image_size)
+        
+        if self.normalize:
+            img = img.astype(np.float32) / 255.0
+        
+        return img
 
 
 # ---------------------------------------------------

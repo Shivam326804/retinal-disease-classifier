@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.config import Config
 from src.utils.logger import setup_logger
+from src.preprocessing.data_preprocessor import DataPreprocessor
 from src.inference import Predictor, GradCAMVisualizer
 
 logger = setup_logger(__name__)
@@ -180,8 +181,8 @@ def show_prediction():
         st.image(image, caption="Uploaded Image", use_column_width=True)
 
     # preprocess
-    image_resized = image.resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE))
-    image_array = np.array(image_resized).astype(np.float32) / 255.0
+    preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
+    image_array = preprocessor.preprocess_image_array(np.array(image))
 
     predicted_class, confidence, probabilities = (
         st.session_state.predictor.predict(image_array)

@@ -33,7 +33,7 @@ def predict_single_image(
     logger.info(f"\nPredicting on image: {image_path}")
 
     # Load model
-    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.h5")
+    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.keras")
     predictor = Predictor(model_path, Config.DISEASE_CLASSES)
 
     if predictor.model is None:
@@ -117,7 +117,7 @@ def predict_batch(
         logger.warning("No images found in directory")
         return []
 
-    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.h5")
+    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.keras")
 
     predictor = Predictor(model_path, Config.DISEASE_CLASSES)
 

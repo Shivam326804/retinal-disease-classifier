@@ -24,7 +24,6 @@ import seaborn as sns
 
 from src.utils.config import Config
 from src.utils.logger import setup_logger
-from src.preprocessing.data_preprocessor import DataPreprocessor
 from src.preprocessing.dataset_loader import DatasetLoader
 
 logger = setup_logger(__name__)
@@ -36,13 +35,20 @@ logger = setup_logger(__name__)
 
 def load_test_data() -> Tuple[np.ndarray, np.ndarray]:
 
-    logger.info("Loading processed data")
+    logger.info("Loading processed dataset")
 
-    data_preprocessor = DataPreprocessor()
-    images, labels = data_preprocessor.load_processed_data()
+    processed_dir = Config.PROCESSED_DATA_DIR
 
-    if images is None or labels is None:
-        raise ValueError("Processed dataset not found. Run preprocessing first.")
+    images_path = processed_dir / "images.npy"
+    labels_path = processed_dir / "labels.npy"
+
+    if not images_path.exists() or not labels_path.exists():
+        raise FileNotFoundError(
+            "Processed dataset not found. Run preprocessing first."
+        )
+
+    images = np.load(images_path)
+    labels = np.load(labels_path)
 
     logger.info(f"Dataset loaded: {images.shape}")
 
@@ -69,12 +75,15 @@ def load_model() -> tf.keras.Model:
 
     if not model_path.exists():
 
-        for ext in [".h5", ".keras"]:
+        for ext in [".keras", ".h5"]:
             alt_path = Config.MODELS_DIR / f"retinal_disease_classifier{ext}"
 
             if alt_path.exists():
                 model_path = alt_path
                 break
+
+    if not model_path.exists():
+        raise FileNotFoundError("Trained model not found.")
 
     logger.info(f"Loading model from {model_path}")
 
@@ -106,27 +115,21 @@ def evaluate_model(
         shuffle=False,
     )
 
-    # Safe evaluate
     results = model.evaluate(test_dataset, verbose=1)
 
-    if isinstance(results, list) or isinstance(results, tuple):
-
+    if isinstance(results, (list, tuple)):
         loss = float(results[0])
         accuracy = float(results[1]) if len(results) > 1 else 0.0
-
     else:
-
         loss = float(results)
         accuracy = 0.0
 
     logger.info(f"Loss: {loss:.4f}")
     logger.info(f"Accuracy: {accuracy:.4f}")
 
-    # Predictions
     predictions = model.predict(test_dataset, verbose=1)
 
     y_pred = np.argmax(predictions, axis=1)
-
     y_true = test_labels
 
     precision = precision_score(y_true, y_pred, average="weighted")
@@ -207,7 +210,6 @@ def generate_plots(metrics: Dict[str, Any]) -> None:
     plot_path = results_dir / "confusion_matrix.png"
 
     plt.savefig(plot_path, dpi=300)
-
     plt.close()
 
     logger.info(f"Confusion matrix saved to {plot_path}")
@@ -251,7 +253,6 @@ def main() -> None:
     except Exception as e:
 
         logger.error(f"Evaluation failed: {e}")
-
         raise
 
 

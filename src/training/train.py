@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.model_selection import train_test_split
 
 from ..utils.logger import setup_logger
 from ..utils.config import Config
@@ -130,6 +131,18 @@ class Trainer:
 
         logger.info(f"Training history saved to {history_path}")
 
+    # ---------------------------------------------------
+    # SAVE MODEL
+    # ---------------------------------------------------
+
+    def save_model(self, model: tf.keras.Model, model_path: str) -> None:
+        """Save trained model"""
+        try:
+            model.save(model_path)
+            logger.info(f"Model saved to {model_path}")
+        except Exception as e:
+            logger.error(f"Error saving model: {str(e)}")
+
 
 # ======================================================
 # MAIN TRAINING PIPELINE
@@ -137,7 +150,6 @@ class Trainer:
 
 if __name__ == "__main__":
 
-    from src.preprocessing.data_preprocessor import DataPreprocessor
     from src.training.model_builder import ModelBuilder
 
     print("\nStarting retinal disease model training\n")
@@ -146,12 +158,14 @@ if __name__ == "__main__":
     # LOAD DATA
     # ---------------------------------------------------
 
-    preprocessor = DataPreprocessor()
+    images_path = Path(Config.PROCESSED_DATA_DIR) / "images.npy"
+    labels_path = Path(Config.PROCESSED_DATA_DIR) / "labels.npy"
 
-    images, labels = preprocessor.load_processed_data()
-
-    if images is None or labels is None:
+    if not images_path.exists() or not labels_path.exists():
         raise RuntimeError("Processed dataset not found. Run preprocessing first.")
+
+    images = np.load(images_path)
+    labels = np.load(labels_path)
 
     print("Dataset loaded:", images.shape)
 
@@ -168,11 +182,20 @@ if __name__ == "__main__":
     # DATA SPLIT
     # ---------------------------------------------------
 
-    splits = preprocessor.split_dataset(images, labels_categorical)
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        images,
+        labels_categorical,
+        test_size=0.3,
+        stratify=labels,
+        random_state=42,
+    )
 
-    X_train, y_train = splits["train"]
-    X_val, y_val = splits["val"]
-    X_test, y_test = splits["test"]
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp,
+        y_temp,
+        test_size=0.5,
+        random_state=42,
+    )
 
     print("Train:", X_train.shape)
     print("Validation:", X_val.shape)

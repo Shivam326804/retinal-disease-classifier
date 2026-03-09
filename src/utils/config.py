@@ -33,7 +33,7 @@ class Config:
     DATASET_NAME = os.getenv("DATASET_NAME", "APTOS_2019")
     
     # Model
-    MODEL_NAME = os.getenv("MODEL_NAME", "retinal_disease_classifier.h5")
+    MODEL_NAME = os.getenv("MODEL_NAME", "retinal_classifier_efficientnet.keras")
     MODEL_PATH = os.getenv("MODEL_PATH", str(MODELS_DIR))
     
     # Training

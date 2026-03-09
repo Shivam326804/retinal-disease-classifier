@@ -5,6 +5,9 @@ Constructs various CNN architectures for retinal disease classification
 
 import tensorflow as tf
 from typing import Tuple
+from contextlib import redirect_stdout
+import io
+
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -70,7 +73,7 @@ class ModelBuilder:
         return model
 
     # ---------------------------------------------------
-    # CUSTOM CNN (DEEP CNN)
+    # CUSTOM CNN
     # ---------------------------------------------------
 
     def build_custom_cnn(self) -> tf.keras.Model:
@@ -115,7 +118,7 @@ class ModelBuilder:
         return model
 
     # ---------------------------------------------------
-    # RESNET50 TRANSFER LEARNING
+    # RESNET50
     # ---------------------------------------------------
 
     def build_resnet50(self) -> tf.keras.Model:
@@ -153,7 +156,7 @@ class ModelBuilder:
         return model
 
     # ---------------------------------------------------
-    # EFFICIENTNET (BEST MODEL)
+    # EFFICIENTNET
     # ---------------------------------------------------
 
     def build_efficientnet(self) -> tf.keras.Model:
@@ -164,7 +167,6 @@ class ModelBuilder:
             input_shape=self.input_shape
         )
 
-        # freeze most layers
         for layer in base_model.layers[:-30]:
             layer.trainable = False
 
@@ -233,9 +235,7 @@ class ModelBuilder:
     # ---------------------------------------------------
 
     def get_model_summary(self, model: tf.keras.Model) -> str:
-
-        import io
-        from contextlib import redirect_stdout
+        """Return model summary as string"""
 
         stream = io.StringIO()
 

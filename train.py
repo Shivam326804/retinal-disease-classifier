@@ -52,7 +52,7 @@ def load_and_split_data():
     return splits
 
 
-def train_model(model_name, train_dataset, val_dataset, epochs):
+def train_model(model_name, train_dataset, val_dataset, epochs, class_weights=None):
     """Train a single model"""
     logger.info(f"\n{'='*60}")
     logger.info(f"Training model: {model_name}")
@@ -88,11 +88,12 @@ def train_model(model_name, train_dataset, val_dataset, epochs):
         model=model,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
-        epochs=epochs
+        epochs=epochs,
+        class_weights=class_weights
     )
     
     # Save model
-    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.h5")
+    model_path = os.path.join(Config.MODELS_DIR, f"{model_name}.keras")
     trainer.save_model(model, model_path)
     
     # Save training history
@@ -129,6 +130,10 @@ def main():
     X_val, y_val = splits['val']
     X_test, y_test = splits['test']
     
+    # Compute class weights
+    y_train_1d = np.argmax(y_train, axis=1)
+    class_weights = DatasetLoader.get_class_weights(y_train_1d)
+    
     # Create data generators
     train_dataset, val_dataset = DatasetLoader.create_generators(
         X_train, y_train,
@@ -147,7 +152,8 @@ def main():
                 model_name=model_name,
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
-                epochs=args.epochs
+                epochs=args.epochs,
+                class_weights=class_weights
             )
             if result:
                 model, history = result

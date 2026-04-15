@@ -1,31 +1,35 @@
 """
-Streamlit Web Application
-Interactive UI for retinal disease classification
+Streamlit Web Application - FINAL FIXED VERSION
 """
 
+# ---------------------------------------------------
+# SYSTEM FIXES
+# ---------------------------------------------------
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.append(str(ROOT_DIR))
+
+# ---------------------------------------------------
+# IMPORTS
+# ---------------------------------------------------
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from PIL import Image
-from pathlib import Path
-import sys
-import cv2
-
-# Add src folder to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from typing import Optional, Tuple
 
 from src.utils.config import Config
-from src.utils.logger import setup_logger
-from src.preprocessing.data_preprocessor import DataPreprocessor
-from src.inference import Predictor, GradCAMVisualizer
-
-logger = setup_logger(__name__)
+from src.inference.predictor import Predictor
+from src.inference.grad_cam import GradCAMVisualizer
 
 # ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
-
 st.set_page_config(
     page_title="Retinal Disease Classifier",
     page_icon="👁️",
@@ -33,326 +37,244 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------
-# CSS
+# STYLE
 # ---------------------------------------------------
-
 st.markdown("""
 <style>
-.main-header {
-    font-size:40px;
-    font-weight:bold;
-    text-align:center;
-    color:#2E86AB;
-}
-.sub-header{
-    text-align:center;
-    color:#888;
-}
+.stApp { background-color: #0b1220; }
+h1, h2, h3 { color: white; }
+.block-container { padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# SESSION STATE
+# LOAD MODEL
 # ---------------------------------------------------
+@st.cache_resource
+def load_model() -> Tuple[Optional[Predictor], Optional[GradCAMVisualizer]]:
+    model_path = Config.get_model_path()
 
-if "predictor" not in st.session_state:
-    st.session_state.predictor = None
+    if model_path is None:
+        return None, None
 
-if "gradcam" not in st.session_state:
-    st.session_state.gradcam = None
+    predictor = Predictor(
+        model_path=str(model_path),
+        class_names=Config.DISEASE_CLASSES
+    )
 
+    gradcam = GradCAMVisualizer(predictor.model)
+
+    return predictor, gradcam
+
+
+predictor, gradcam = load_model()
+
+# ---------------------------------------------------
+# SAFETY CHECK (CRITICAL FIX)
+# ---------------------------------------------------
+if predictor is None or gradcam is None:
+    st.error("❌ No trained model found. Train model first.")
+    st.stop()
+
+# 👇 Tell Pylance these are NOT None anymore
+assert predictor is not None
+assert gradcam is not None
+
+# ---------------------------------------------------
+# SESSION
+# ---------------------------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # ---------------------------------------------------
-# LOAD MODEL
+# NAVIGATION
 # ---------------------------------------------------
-
-@st.cache_resource
-def load_model():
-
-    model_path = Path(Config.MODELS_DIR) / Config.MODEL_NAME
-
-    if not model_path.exists():
-        st.error("Model not found. Train model first.")
-        return None
-
-    try:
-        predictor = Predictor(str(model_path), Config.DISEASE_CLASSES)
-        return predictor
-
-    except Exception as e:
-        st.error(f"Model loading failed: {e}")
-        return None
-
+page = st.sidebar.radio(
+    "Navigation",
+    ["Home", "Prediction", "Confusion Matrix", "History", "About"]
+)
 
 # ---------------------------------------------------
-# MAIN
+# HOME
 # ---------------------------------------------------
+if page == "Home":
+    st.title("👁️ Retinal Disease AI Classifier")
 
-def main():
+    st.markdown("""
+Deep learning model to detect diabetic retinopathy.
 
-    st.markdown('<p class="main-header">Retinal Disease AI Classifier</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Deep Learning Based Diabetic Retinopathy Detection</p>', unsafe_allow_html=True)
-
-    st.warning(
-        "This AI tool is for educational and research purposes only. "
-        "It should not be used for medical diagnosis. "
-        "Always consult a medical professional."
-    )
-
-    st.session_state.predictor = load_model()
-
-    with st.sidebar:
-
-        st.title("Navigation")
-
-        st.markdown("### Model Info")
-        st.write(f"Architecture: EfficientNet")
-        st.write(f"Input Size: {Config.IMAGE_SIZE}x{Config.IMAGE_SIZE}")
-        st.write(f"Classes: {Config.NUM_CLASSES}")
-
-        page = st.radio(
-            "Select Page",
-            [
-                "Home",
-                "Make Prediction",
-                "Model Information",
-                "Prediction History",
-                "About"
-            ]
-        )
-
-    if page == "Home":
-        show_home()
-
-    elif page == "Make Prediction":
-        show_prediction()
-
-    elif page == "Model Information":
-        show_model_info()
-
-    elif page == "Prediction History":
-        show_history()
-
-    elif page == "About":
-        show_about()
-
-
-# ---------------------------------------------------
-# HOME PAGE
-# ---------------------------------------------------
-
-def show_home():
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.subheader("System Overview")
-
-        st.write("""
-This AI system automatically detects **diabetic retinopathy severity**
-from retinal fundus images using deep learning models.
+### Classes:
+- No DR
+- Mild NPDR
+- Moderate NPDR
+- Severe NPDR
+- Proliferative DR
 """)
 
-    with col2:
-
-        st.subheader("Disease Classes")
-
-        for k, v in Config.DISEASE_CLASSES.items():
-            st.write(f"{k} : {v}")
-
-
 # ---------------------------------------------------
-# PREDICTION PAGE
+# PREDICTION
 # ---------------------------------------------------
+elif page == "Prediction":
 
-def show_prediction():
-
-    st.subheader("Retinal Disease Detection")
-
-    if st.session_state.predictor is None:
-        st.error("Model not loaded")
-        return
+    st.title("🔍 Analyze Retinal Image")
 
     uploaded_file = st.file_uploader(
-        "Upload retinal image",
+        "Upload Fundus Image",
         type=["jpg", "jpeg", "png"]
     )
 
-    if uploaded_file is None:
-        return
+    if uploaded_file:
 
-    image = Image.open(uploaded_file).convert("RGB")
+        image = Image.open(uploaded_file).convert("RGB")
+        image_np = np.array(image)
 
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns([2, 1])
 
-    with col1:
-        st.image(image, caption="Uploaded Image", use_container_width=True)
+        with col1:
+            st.image(image, caption="Uploaded Image", width="stretch")
 
-    # preprocess
-    preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
-    image_array = preprocessor.preprocess_image_array(np.array(image))
+        with st.spinner("🔄 Analyzing..."):
 
-    predicted_class, confidence, probabilities = (
-        st.session_state.predictor.predict(image_array)
-    )
+            try:
+                pred, conf, probs = predictor.predict(image_np)
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
+                st.stop()
 
-    with col2:
+        # RESULT
+        with col2:
+            st.success(pred)
+            st.metric("Confidence", f"{conf * 100:.2f}%")
 
-        st.subheader("Prediction")
+        st.divider()
 
-        st.success(f"Prediction: {predicted_class}")
-        st.write(f"Confidence: **{confidence*100:.2f}%**")
+        # TABLE
+        st.subheader("📊 Prediction Breakdown")
 
-        prob_dist = (
-            st.session_state.predictor
-            .get_prediction_confidence_distribution(probabilities)
+        df = pd.DataFrame({
+            "Disease": list(Config.DISEASE_CLASSES.values()),
+            "Probability (%)": (probs * 100).round(2)
+        }).sort_values(by="Probability (%)", ascending=False)
+
+        st.dataframe(df, width="stretch")
+
+        # CHART
+        st.subheader("📈 Confidence Distribution")
+        st.bar_chart(df.set_index("Disease"))
+
+        # ---------------------------------------------------
+        # GRAD-CAM (FIXED SAFE CHECK)
+        # ---------------------------------------------------
+        st.subheader("🔥 Model Attention (Grad-CAM)")
+
+        try:
+            processed_img = predictor.preprocess(image_np)
+
+            heatmap = gradcam.generate_cam(
+                processed_img,
+                class_idx=int(np.argmax(probs))
+            )
+
+            overlay = gradcam.overlay_heatmap(image_np, heatmap)
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.image(image, caption="Original", width="stretch")
+
+            with c2:
+                st.image(overlay, caption="Grad-CAM", width="stretch")
+
+        except Exception as e:
+            st.warning(f"Grad-CAM failed: {e}")
+
+        # INFO
+        st.info(f"""
+Prediction: **{pred}**  
+Confidence: **{conf*100:.2f}%**
+
+⚠️ Not a medical diagnosis.
+""")
+
+        # SAVE HISTORY
+        st.session_state.history.append({
+            "image": uploaded_file.name,
+            "prediction": pred,
+            "confidence": f"{conf*100:.2f}%"
+        })
+
+# ---------------------------------------------------
+# CONFUSION MATRIX
+# ---------------------------------------------------
+elif page == "Confusion Matrix":
+
+    st.title("📊 Model Evaluation")
+
+    try:
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import confusion_matrix, classification_report
+
+        images = np.load(Config.PROCESSED_IMAGES)
+        labels = np.load(Config.PROCESSED_LABELS)
+
+        st.info(f"Loaded {len(images)} samples")
+
+        preds = predictor.predict_batch(images)
+        pred_labels = np.argmax(preds, axis=1)
+
+        cm = confusion_matrix(labels, pred_labels)
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=Config.CLASS_NAMES,
+            yticklabels=Config.CLASS_NAMES
         )
 
-        df = pd.DataFrame(
-            list(prob_dist.items()),
-            columns=["Disease", "Probability"]
-        ).sort_values("Probability", ascending=True)
-
-        fig, ax = plt.subplots()
-        ax.barh(df["Disease"], df["Probability"])
-        ax.set_xlabel("Probability")
-        ax.set_title("Prediction Probability Distribution")
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+        ax.set_title("Confusion Matrix")
 
         st.pyplot(fig)
 
-    # ---------------------------------------------------
-    # GRADCAM
-    # ---------------------------------------------------
-
-    st.divider()
-    st.subheader("Grad-CAM Visualization")
-
-    try:
-
-        if st.session_state.gradcam is None:
-
-            st.session_state.gradcam = GradCAMVisualizer(
-                st.session_state.predictor.model
-            )
-
-        visualizer = st.session_state.gradcam
-
-        class_idx = int(np.argmax(probabilities))
-
-        heatmap = visualizer.generate_cam(image_array, class_idx)
-
-        heatmap = np.nan_to_num(heatmap)
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
-
-        heatmap = cv2.resize(
-            heatmap,
-            (Config.IMAGE_SIZE, Config.IMAGE_SIZE)
+        report = classification_report(
+            labels,
+            pred_labels,
+            target_names=Config.CLASS_NAMES,
+            output_dict=True
         )
 
-        heatmap_uint8 = (heatmap * 255).astype(np.uint8)
-
-        heatmap_color = cv2.applyColorMap(
-            heatmap_uint8,
-            cv2.COLORMAP_JET
-        )
-
-        heatmap_color = cv2.cvtColor(
-            heatmap_color,
-            cv2.COLOR_BGR2RGB
-        )
-
-        heatmap_color = heatmap_color.astype(np.float32) / 255.0
-
-        overlay = image_array * 0.6 + heatmap_color * 0.4
-        overlay = np.clip(overlay, 0, 1)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.image(image_array, caption="Original")
-
-        with col2:
-            st.image(heatmap_color, caption="Grad-CAM Heatmap")
-
-        with col3:
-            st.image(overlay, caption="Attention Overlay")
+        st.dataframe(pd.DataFrame(report).transpose(), width="stretch")
 
     except Exception as e:
-
-        st.warning(f"GradCAM failed: {e}")
-
-    st.session_state.history.append(
-        {
-            "timestamp": pd.Timestamp.now(),
-            "image_name": uploaded_file.name,
-            "disease": predicted_class,
-            "confidence": confidence
-        }
-    )
-
-
-# ---------------------------------------------------
-# MODEL INFO
-# ---------------------------------------------------
-
-def show_model_info():
-
-    st.subheader("Model Information")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.metric("Input Size", f"{Config.IMAGE_SIZE} x {Config.IMAGE_SIZE}")
-
-    with col2:
-        st.metric("Classes", Config.NUM_CLASSES)
-
+        st.error(f"Error: {e}")
 
 # ---------------------------------------------------
 # HISTORY
 # ---------------------------------------------------
+elif page == "History":
 
-def show_history():
-
-    st.subheader("Prediction History")
+    st.title("📜 Prediction History")
 
     if not st.session_state.history:
         st.info("No predictions yet")
-        return
-
-    df = pd.DataFrame(st.session_state.history)
-
-    st.dataframe(df, use_container_width=True)
-
+    else:
+        st.dataframe(pd.DataFrame(st.session_state.history), width="stretch")
 
 # ---------------------------------------------------
 # ABOUT
 # ---------------------------------------------------
+elif page == "About":
 
-def show_about():
-
-    st.subheader("About")
+    st.title("ℹ️ About")
 
     st.write("""
-Retinal Disease Classification System
+Model: EfficientNet  
+Task: Diabetic Retinopathy Classification  
 
-This system detects diabetic retinopathy using deep learning.
-
-Dataset:
-APTOS 2019 Blindness Detection
-
-Technologies Used:
-TensorFlow  
-OpenCV  
-Streamlit  
-Grad-CAM Explainability
+This system analyzes retinal images using deep learning.
 """)
-
-
-# ---------------------------------------------------
-
-if __name__ == "__main__":
-    main()

@@ -1,313 +1,196 @@
-"""
-Training Module
-Handles model training, validation, and checkpointing
-"""
-
-import json
 import numpy as np
 import tensorflow as tf
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional
-from sklearn.utils.class_weight import compute_class_weight
+from tensorflow import keras
+from tensorflow.keras import layers
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 
-from ..utils.logger import setup_logger
-from ..utils.config import Config
-
-logger = setup_logger(__name__)
+from src.utils.config import Config
 
 
 # ---------------------------------------------------
-# GPU MEMORY FIX (prevents crashes)
+# Load Data (FIXED)
 # ---------------------------------------------------
+def load_data():
+    images = np.load(Config.PROCESSED_IMAGES)
+    labels = np.load(Config.PROCESSED_LABELS)
 
-gpus = tf.config.list_physical_devices("GPU")
-for gpu in gpus:
-    try:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    except Exception:
-        pass
+    # ❌ REMOVE normalization
+    # images = images / 255.0  ← REMOVE THIS
 
+    print(f"Loaded images: {images.shape}")
+    print(f"Loaded labels: {labels.shape}")
 
-class Trainer:
-    """Handles model training pipeline"""
-
-    def __init__(self, model_name: str = "efficientnet", checkpoint_dir: Optional[str] = None):
-
-        self.model_name = model_name
-
-        self.checkpoint_dir = (
-            Path(checkpoint_dir) if checkpoint_dir else Path(Config.CHECKPOINTS_DIR)
-        )
-
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-        self.training_history: Dict[str, List[float]] = {}
-
-        logger.info(f"Trainer initialized for model: {model_name}")
-
-    # ---------------------------------------------------
-    # TRAIN
-    # ---------------------------------------------------
-
-    def train(
-        self,
-        model: tf.keras.Model,
-        train_dataset: tf.data.Dataset,
-        val_dataset: tf.data.Dataset,
-        epochs: int,
-        class_weights: Optional[Dict[int, float]] = None,
-        callbacks: Optional[List[tf.keras.callbacks.Callback]] = None,
-    ) -> Dict:
-
-        if callbacks is None:
-            callbacks = self._get_default_callbacks()
-
-        logger.info("Starting training")
-
-        history = model.fit(
-            train_dataset,
-            validation_data=val_dataset,
-            epochs=epochs,
-            class_weight=class_weights,
-            callbacks=callbacks,
-            verbose=1,
-        )
-
-        self.training_history = history.history
-
-        logger.info("Training completed")
-
-        return history.history
-
-    # ---------------------------------------------------
-    # CALLBACKS
-    # ---------------------------------------------------
-
-    def _get_default_callbacks(self):
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        checkpoint_path = self.checkpoint_dir / f"{self.model_name}_{timestamp}.keras"
-
-        callbacks = [
-
-            tf.keras.callbacks.EarlyStopping(
-                monitor="val_loss",
-                patience=Config.EARLY_STOPPING_PATIENCE,
-                restore_best_weights=True,
-                verbose=1,
-            ),
-
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath=str(checkpoint_path),
-                monitor="val_accuracy",
-                save_best_only=True,
-                verbose=1,
-            ),
-
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss",
-                factor=0.5,
-                patience=4,
-                min_lr=1e-7,
-                verbose=1,
-            ),
-
-            tf.keras.callbacks.TensorBoard(
-                log_dir=str(Path(Config.LOGS_DIR) / self.model_name),
-                histogram_freq=1,
-            ),
-        ]
-
-        return callbacks
-
-    # ---------------------------------------------------
-    # SAVE HISTORY
-    # ---------------------------------------------------
-
-    def save_training_history(self):
-
-        history_path = Path(Config.LOGS_DIR) / f"{self.model_name}_history.json"
-
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-
-        history_dict = {
-            key: [float(v) for v in values]
-            for key, values in self.training_history.items()
-        }
-
-        with open(history_path, "w") as f:
-            json.dump(history_dict, f, indent=4)
-
-        logger.info(f"Training history saved to {history_path}")
-
-    # ---------------------------------------------------
-    # SAVE MODEL
-    # ---------------------------------------------------
-
-    def save_model(self, model: tf.keras.Model, model_path: Path) -> None:
-
-        try:
-            model.save(model_path)
-            logger.info(f"Model saved to {model_path}")
-
-        except Exception as e:
-            logger.error(f"Error saving model: {str(e)}")
+    return images, labels
 
 
-# ======================================================
-# MAIN TRAINING PIPELINE
-# ======================================================
+# ---------------------------------------------------
+# Build Model (STABLE VERSION)
+# ---------------------------------------------------
+def build_model(num_classes):
 
-if __name__ == "__main__":
-
-    from src.training.model_builder import ModelBuilder
-
-    print("\nStarting retinal disease model training\n")
-
-    # ---------------------------------------------------
-    # LOAD DATA
-    # ---------------------------------------------------
-
-    images_path = Path(Config.PROCESSED_DATA_DIR) / "images.npy"
-    labels_path = Path(Config.PROCESSED_DATA_DIR) / "labels.npy"
-
-    if not images_path.exists() or not labels_path.exists():
-        raise RuntimeError("Processed dataset not found. Run preprocessing first.")
-
-    images = np.load(images_path)
-    labels = np.load(labels_path)
-
-    print("Dataset loaded:", images.shape)
-
-    # ---------------------------------------------------
-    # ONE HOT ENCODE
-    # ---------------------------------------------------
-
-    labels_categorical = tf.keras.utils.to_categorical(
-        labels,
-        num_classes=Config.NUM_CLASSES
-    )
-
-    # ---------------------------------------------------
-    # DATA SPLIT
-    # ---------------------------------------------------
-
-    X_train, X_temp, y_train, y_temp, labels_train, labels_temp = train_test_split(
-        images,
-        labels_categorical,
-        labels,
-        test_size=0.3,
-        stratify=labels,
-        random_state=42,
-    )
-
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp,
-        y_temp,
-        test_size=0.5,
-        stratify=labels_temp,
-        random_state=42,
-    )
-
-    print("Train:", X_train.shape)
-    print("Validation:", X_val.shape)
-    print("Test:", X_test.shape)
-
-    # ---------------------------------------------------
-    # DATA AUGMENTATION
-    # ---------------------------------------------------
-
-    data_augmentation = tf.keras.Sequential([
-        tf.keras.layers.RandomFlip("horizontal"),
-        tf.keras.layers.RandomRotation(0.08),
-        tf.keras.layers.RandomZoom(0.1),
-        tf.keras.layers.RandomContrast(0.1),
+    data_augmentation = keras.Sequential([
+        layers.RandomFlip("horizontal"),
+        layers.RandomRotation(0.05),
+        layers.RandomZoom(0.05),
     ])
 
-    # ---------------------------------------------------
-    # TF.DATA PIPELINE
-    # ---------------------------------------------------
-
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-
-    train_dataset = train_dataset.shuffle(buffer_size=2048)
-
-    train_dataset = train_dataset.map(
-        lambda x, y: (data_augmentation(x, training=True), y),
-        num_parallel_calls=tf.data.AUTOTUNE,
+    base_model = tf.keras.applications.EfficientNetB0(
+        include_top=False,
+        weights="imagenet",
+        input_shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3)
     )
 
-    train_dataset = train_dataset.batch(Config.BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    base_model._name = "efficientnet_base"
+    base_model.trainable = False
 
-    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-    val_dataset = val_dataset.batch(Config.BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    inputs = keras.Input(shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3))
 
-    test_dataset = tf.data.Dataset.from_tensor_slices((X_test, y_test))
-    test_dataset = test_dataset.batch(Config.BATCH_SIZE)
+    x = data_augmentation(inputs)
 
-    # ---------------------------------------------------
-    # CLASS WEIGHTS
-    # ---------------------------------------------------
+    # ✅ ONLY preprocessing (no manual scaling)
+    x = tf.keras.applications.efficientnet.preprocess_input(x)
 
-    class_weights_array = compute_class_weight(
+    x = base_model(x, training=False)
+
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dense(256, activation="relu")(x)
+    x = layers.Dropout(0.4)(x)
+
+    outputs = layers.Dense(num_classes, activation="softmax")(x)
+
+    model = keras.Model(inputs, outputs)
+
+    model.compile(
+        optimizer=keras.optimizers.Adam(
+            learning_rate=3e-4,
+            clipnorm=1.0   # ✅ stabilizes training
+        ),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+
+    return model
+
+
+# ---------------------------------------------------
+# Train Model
+# ---------------------------------------------------
+def train():
+
+    Config.set_seed(Config.RANDOM_SEED)
+    Config.create_all_directories()
+
+    images, labels = load_data()
+
+    X_train, X_val, y_train, y_val = train_test_split(
+        images,
+        labels,
+        test_size=Config.VALIDATION_SPLIT,
+        stratify=labels,
+        random_state=42
+    )
+
+    num_classes = len(np.unique(labels))
+
+    class_weights = compute_class_weight(
         class_weight="balanced",
         classes=np.unique(labels),
-        y=labels,
+        y=labels
     )
-
-    class_weights = {i: float(w) for i, w in enumerate(class_weights_array)}
+    class_weights = dict(enumerate(class_weights))
 
     print("Class weights:", class_weights)
 
-    # ---------------------------------------------------
-    # BUILD MODEL
-    # ---------------------------------------------------
-
-    builder = ModelBuilder(
-        input_shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3),
-        num_classes=Config.NUM_CLASSES,
-    )
-
-    model = builder.build_efficientnet()
-
-    print("\nModel Summary\n")
+    model = build_model(num_classes)
     model.summary()
 
-    # ---------------------------------------------------
-    # TRAIN
-    # ---------------------------------------------------
+    checkpoint_path = str(Config.CHECKPOINTS_DIR / "best_model.keras")
+    final_model_path = str(Config.CHECKPOINTS_DIR / "final_model.keras")
 
-    trainer = Trainer(model_name="efficientnet")
+    callbacks = [
+        keras.callbacks.ModelCheckpoint(
+            filepath=checkpoint_path,
+            monitor="val_loss",
+            save_best_only=True,
+            verbose=1
+        ),
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=10,
+            restore_best_weights=True
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.3,
+            patience=3,
+            min_lr=1e-6,
+            verbose=1
+        )
+    ]
 
-    history = trainer.train(
-        model=model,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        epochs=Config.EPOCHS,
-        class_weights=class_weights,
+    # ---------------------------------------------------
+    # Phase 1
+    # ---------------------------------------------------
+    print("\n🚀 Phase 1 Training...\n")
+
+    model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=25,
+        batch_size=Config.BATCH_SIZE,
+        class_weight=class_weights,
+        shuffle=True,
+        callbacks=callbacks
     )
 
-    trainer.save_training_history()
+    # ---------------------------------------------------
+    # Load best model
+    # ---------------------------------------------------
+    print("\n📥 Loading best checkpoint...\n")
+    model = keras.models.load_model(checkpoint_path)
+
+    base_model = model.get_layer("efficientnet_base")
 
     # ---------------------------------------------------
-    # EVALUATE
+    # Phase 2 (SAFE FINE-TUNING)
     # ---------------------------------------------------
+    print("\n🔧 Fine-tuning...\n")
 
-    print("\nEvaluating model...\n")
+    # ❗ Only unfreeze TOP 30 layers (not 100)
+    for layer in base_model.layers[:-30]:
+        layer.trainable = False
 
-    test_results = model.evaluate(test_dataset)
+    for layer in base_model.layers[-30:]:
+        layer.trainable = True
 
-    print("\nTest Results:", test_results)
+    model.compile(
+        optimizer=keras.optimizers.Adam(
+            learning_rate=1e-5,
+            clipnorm=1.0
+        ),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
 
-    # ---------------------------------------------------
-    # SAVE MODEL
-    # ---------------------------------------------------
+    model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=15,
+        batch_size=Config.BATCH_SIZE,
+        class_weight=class_weights,
+        shuffle=True,
+        callbacks=callbacks
+    )
 
-    model_path = Path(Config.MODELS_DIR) / "retinal_classifier_efficientnet.keras"
+    model.save(final_model_path)
 
-    trainer.save_model(model, model_path)
+    print(f"\n✅ Final model saved at: {final_model_path}")
 
-    print("\nModel saved to:", model_path)
+
+# ---------------------------------------------------
+if __name__ == "__main__":
+    train()

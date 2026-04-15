@@ -7,15 +7,16 @@ import os
 import io
 import base64
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException
 import cv2
+
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from PIL import Image
 from typing import Dict
 from datetime import datetime
-from pathlib import Path
 
 from ..utils.logger import setup_logger
 from ..utils.config import Config
@@ -24,7 +25,9 @@ from ..inference import Predictor, GradCAMVisualizer
 logger = setup_logger(__name__)
 
 
-# ---------------- RESPONSE MODELS ----------------
+# ---------------------------------------------------
+# RESPONSE MODELS
+# ---------------------------------------------------
 
 class HealthCheckResponse(BaseModel):
     status: str
@@ -47,7 +50,9 @@ class ModelInfoResponse(BaseModel):
     input_shape: tuple
 
 
-# ---------------- APP FACTORY ----------------
+# ---------------------------------------------------
+# APP FACTORY
+# ---------------------------------------------------
 
 def create_app() -> FastAPI:
 
@@ -57,6 +62,7 @@ def create_app() -> FastAPI:
         version="1.0.0"
     )
 
+    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -68,41 +74,31 @@ def create_app() -> FastAPI:
     app.state.predictor = None
     app.state.predictions_log = []
 
-    # ---------------- STARTUP ----------------
+    # ---------------------------------------------------
+    # STARTUP
+    # ---------------------------------------------------
 
     @app.on_event("startup")
     async def startup_event():
 
         try:
+            model_path = Config.MODEL_FULL_PATH
 
-            primary_path = os.path.join(Config.MODELS_DIR, Config.MODEL_NAME)
-
-            model_path = None
-
-            if os.path.exists(primary_path):
-                model_path = primary_path
-
+            if model_path and model_path.exists():
+                app.state.predictor = Predictor(
+                    str(model_path),
+                    Config.DISEASE_CLASSES
+                )
+                logger.info(f"✅ Model loaded: {model_path}")
             else:
-
-                models_dir = Path(Config.MODELS_DIR)
-
-                h5_files = list(models_dir.glob("*.h5"))
-
-                if h5_files:
-                    model_path = str(h5_files[0])
-                    logger.warning(f"Using fallback model {model_path}")
-
-            if model_path:
-                app.state.predictor = Predictor(model_path, Config.DISEASE_CLASSES)
-                logger.info(f"Predictor initialized using {model_path}")
-
-            else:
-                logger.warning("No model found")
+                logger.warning("❌ No model found in checkpoints")
 
         except Exception as e:
             logger.error(f"Startup error: {str(e)}")
 
-    # ---------------- HEALTH CHECK ----------------
+    # ---------------------------------------------------
+    # HEALTH CHECK
+    # ---------------------------------------------------
 
     @app.get("/health-check", response_model=HealthCheckResponse)
     async def health_check():
@@ -113,7 +109,9 @@ def create_app() -> FastAPI:
             version="1.0.0"
         )
 
-    # ---------------- MODEL INFO ----------------
+    # ---------------------------------------------------
+    # MODEL INFO
+    # ---------------------------------------------------
 
     @app.get("/model-info", response_model=ModelInfoResponse)
     async def model_info():
@@ -123,8 +121,9 @@ def create_app() -> FastAPI:
 
         model_file = os.path.basename(app.state.predictor.model_path)
 
-        # convert int keys -> string keys
-        classes_dict = {str(k): v for k, v in Config.DISEASE_CLASSES.items()}
+        classes_dict = {
+            str(k): v for k, v in Config.DISEASE_CLASSES.items()
+        }
 
         return ModelInfoResponse(
             model_name=model_file,
@@ -133,7 +132,9 @@ def create_app() -> FastAPI:
             input_shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3)
         )
 
-    # ---------------- PREDICT ----------------
+    # ---------------------------------------------------
+    # PREDICT
+    # ---------------------------------------------------
 
     @app.post("/predict", response_model=PredictionResponse)
     async def predict(file: UploadFile = File(...)):
@@ -142,11 +143,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="Model not loaded")
 
         try:
-
             contents = await file.read()
 
             image = Image.open(io.BytesIO(contents)).convert("RGB")
-
             image = image.resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE))
 
             image_array = np.array(image).astype(np.float32) / 255.0
@@ -155,17 +154,16 @@ def create_app() -> FastAPI:
                 app.state.predictor.predict(image_array)
             )
 
-            prob_dist = app.state.predictor.get_prediction_confidence_distribution(probabilities)
+            prob_dist = app.state.predictor.get_prediction_confidence_distribution(
+                probabilities
+            )
 
-            prediction_log = {
+            app.state.predictions_log.append({
                 "timestamp": datetime.now().isoformat(),
                 "filename": file.filename,
                 "prediction": predicted_class,
-                "confidence": confidence,
-                "probabilities": prob_dist
-            }
-
-            app.state.predictions_log.append(prediction_log)
+                "confidence": confidence
+            })
 
             return PredictionResponse(
                 predicted_disease=predicted_class,
@@ -179,7 +177,9 @@ def create_app() -> FastAPI:
             logger.error(str(e))
             raise HTTPException(status_code=400, detail=str(e))
 
-    # ---------------- PREDICT WITH GRADCAM ----------------
+    # ---------------------------------------------------
+    # PREDICT WITH GRADCAM
+    # ---------------------------------------------------
 
     @app.post("/predict-with-gradcam")
     async def predict_with_gradcam(file: UploadFile = File(...)):
@@ -188,11 +188,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="Model not loaded")
 
         try:
-
             contents = await file.read()
 
             image = Image.open(io.BytesIO(contents)).convert("RGB")
-
             image = image.resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE))
 
             image_array = np.array(image).astype(np.float32) / 255.0
@@ -204,26 +202,36 @@ def create_app() -> FastAPI:
             gradcam_b64 = None
 
             try:
-
                 if app.state.predictor.model:
 
                     visualizer = GradCAMVisualizer(app.state.predictor.model)
 
                     class_idx = int(np.argmax(probabilities))
 
-                    heatmap = visualizer.generate_cam(image_array, class_idx)
+                    heatmap = visualizer.generate_cam(
+                        np.expand_dims(image_array, axis=0),
+                        class_idx
+                    )
 
-                    visualization = visualizer.visualize_with_heatmap(image_array, heatmap)
+                    overlay = visualizer.overlay_heatmap(
+                        image_array,
+                        heatmap
+                    )
 
-                    success, buffer = cv2.imencode(".png", visualization)
+                    # ✅ Pylance-safe fix
+                    success, buffer = cv2.imencode(".png", overlay)  # type: ignore
 
                     if success:
-                        gradcam_b64 = base64.b64encode(buffer.tobytes()).decode()
+                        gradcam_b64 = base64.b64encode(
+                            buffer.tobytes()
+                        ).decode()
 
             except Exception as e:
                 logger.warning(f"GradCAM failed: {str(e)}")
 
-            prob_dist = app.state.predictor.get_prediction_confidence_distribution(probabilities)
+            prob_dist = app.state.predictor.get_prediction_confidence_distribution(
+                probabilities
+            )
 
             return JSONResponse(
                 content={
@@ -238,7 +246,9 @@ def create_app() -> FastAPI:
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    # ---------------- PREDICTION LOG ----------------
+    # ---------------------------------------------------
+    # PREDICTION LOG
+    # ---------------------------------------------------
 
     @app.get("/predictions-log")
     async def get_predictions_log():
@@ -248,44 +258,19 @@ def create_app() -> FastAPI:
             "predictions": app.state.predictions_log[-100:]
         }
 
-    # ---------------- IMAGE UPLOAD ----------------
-
-    @app.post("/upload-image")
-    async def upload_image(file: UploadFile = File(...)):
-
-        try:
-
-            upload_dir = Path(Config.RAW_DATA_DIR) / "uploads"
-
-            upload_dir.mkdir(parents=True, exist_ok=True)
-
-            filename = file.filename if file.filename else f"upload_{datetime.now().timestamp()}.png"
-
-            file_path = upload_dir / filename
-
-            contents = await file.read()
-
-            with open(file_path, "wb") as f:
-                f.write(contents)
-
-            return {
-                "message": "Image uploaded successfully",
-                "filename": filename,
-                "path": str(file_path)
-            }
-
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
     return app
 
 
-# ---------------- APP INSTANCE ----------------
+# ---------------------------------------------------
+# APP INSTANCE
+# ---------------------------------------------------
 
 app = create_app()
 
 
-# ---------------- RUN SERVER ----------------
+# ---------------------------------------------------
+# RUN SERVER
+# ---------------------------------------------------
 
 if __name__ == "__main__":
 
@@ -295,6 +280,5 @@ if __name__ == "__main__":
         app,
         host=Config.API_HOST,
         port=Config.API_PORT,
-        workers=Config.API_WORKERS,
         reload=Config.DEBUG
     )

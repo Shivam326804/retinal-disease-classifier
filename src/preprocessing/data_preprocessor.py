@@ -1,347 +1,140 @@
-"""
-Data Preprocessor Module
-Handles image preprocessing, normalization, and dataset preparation
-"""
-
 import cv2
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Dict, Optional
-from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
-from ..utils.logger import setup_logger
-from ..utils.config import Config
-
-logger = setup_logger(__name__)
+from src.utils.config import Config
 
 
 class DataPreprocessor:
-    """Handles all data preprocessing tasks"""
-
-    def __init__(self, image_size: int = 224, normalize: bool = True):
-
+    def __init__(self, image_size=224):
         self.image_size = image_size
-        self.normalize = normalize
-
-        self.processed_data_dir = Path(Config.PROCESSED_DATA_DIR)
-        self.processed_data_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"DataPreprocessor initialized with image_size={image_size}")
+        print(f"INFO: Initialized DataPreprocessor (image_size={image_size})")
 
     # ---------------------------------------------------
-    # FUNDUS CROPPING
+    # CLAHE Enhancement
     # ---------------------------------------------------
+    def enhance_image(self, img):
+        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
 
-    def crop_fundus(self, img: np.ndarray) -> np.ndarray:
-        """Remove black borders around retina"""
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
 
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        limg = cv2.merge((cl, a, b))
+        enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
 
-        _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-
-        coords = np.column_stack(np.where(thresh > 0))
-
-        if coords.size == 0:
-            return img
-
-        y0, x0 = coords.min(axis=0)
-        y1, x1 = coords.max(axis=0)
-
-        return img[y0:y1, x0:x1]
+        return enhanced
 
     # ---------------------------------------------------
-    # BEN GRAHAM PREPROCESSING
+    # Load Image
     # ---------------------------------------------------
-
-    def ben_graham_preprocess(self, img: np.ndarray, sigma: int = 10) -> np.ndarray:
-        """Enhance retinal vessels"""
-
-        return cv2.addWeighted(
-            img,
-            4,
-            cv2.GaussianBlur(img, (0, 0), sigma),
-            -4,
-            128,
-        )
-
-    # ---------------------------------------------------
-    # IMAGE LOADING
-    # ---------------------------------------------------
-
-    def load_image(
-        self,
-        image_path: Path,
-        target_size: Optional[Tuple[int, int]] = None
-    ) -> Optional[np.ndarray]:
-
+    def load_image(self, image_path):
         try:
-
             img = cv2.imread(str(image_path))
 
             if img is None:
-                logger.warning(f"Failed to load image: {image_path}")
                 return None
 
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            img = self.crop_fundus(img)
+            # Resize first (fast)
+            img = cv2.resize(img, (self.image_size, self.image_size))
 
-            img = self.ben_graham_preprocess(img)
+            # Remove invalid/dark images
+            if np.mean(img) < 10:
+                return None
 
-            if target_size is not None:
-                h, w = target_size
-                img = cv2.resize(img, (w, h))
-            else:
-                img = self._resize_with_padding(img, self.image_size)
+            # Enhance
+            img = self.enhance_image(img)
 
-            if self.normalize:
-                img = img.astype(np.float32) / 255.0
+            return img.astype(np.float32)
 
-            return img
-
-        except Exception as e:
-            logger.error(f"Error loading image {image_path}: {str(e)}")
+        except Exception:
             return None
 
     # ---------------------------------------------------
-    # RESIZE WITH PADDING
+    # Dataset Processing
     # ---------------------------------------------------
+    def preprocess_dataset(self):
+        images_dir = Path(Config.IMAGES_DIR)
+        labels_path = Path(Config.LABELS_FILE)
 
-    def _resize_with_padding(self, img: np.ndarray, target_size: int) -> np.ndarray:
+        if not images_dir.exists():
+            raise FileNotFoundError(f"❌ Images directory not found: {images_dir}")
 
-        h, w = img.shape[:2]
+        if not labels_path.exists():
+            raise FileNotFoundError(f"❌ CSV file not found: {labels_path}")
 
-        scale = min(target_size / h, target_size / w)
-
-        new_h = int(h * scale)
-        new_w = int(w * scale)
-
-        resized = cv2.resize(img, (new_w, new_h))
-
-        top = (target_size - new_h) // 2
-        bottom = target_size - new_h - top
-        left = (target_size - new_w) // 2
-        right = target_size - new_w - left
-
-        padded = cv2.copyMakeBorder(
-            resized,
-            top,
-            bottom,
-            left,
-            right,
-            cv2.BORDER_CONSTANT,
-            value=(0, 0, 0),
-        )
-
-        return padded
-
-    # ---------------------------------------------------
-    # DATASET PREPROCESSING
-    # ---------------------------------------------------
-
-    def preprocess_dataset(
-        self,
-        images_dir: Path,
-        labels_df: Optional[pd.DataFrame] = None,
-        save_processed: bool = True
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-
-        logger.info(f"Starting dataset preprocessing from {images_dir}")
+        df = pd.read_csv(labels_path)
 
         images = []
         labels = []
 
-        failed_count = 0
+        print("INFO: Starting preprocessing...")
 
-        if labels_df is not None:
+        for i, row in enumerate(tqdm(df.itertuples(index=False), total=len(df))):
 
-            for i, (_, row) in enumerate(labels_df.iterrows()):
+            img_name = f"{row.id_code}.png"
+            label = row.diagnosis
 
-                image_id = str(row["id_code"])
-                label = int(row["diagnosis"])
+            img_path = images_dir / img_name
 
-                # SEARCH IMAGE INSIDE SUBFOLDERS
-                matches = list(images_dir.rglob(f"{image_id}.png"))
+            if not img_path.exists():
+                continue
 
-                if not matches:
-                    failed_count += 1
-                    continue
+            img = self.load_image(img_path)
 
-                image_path = matches[0]
+            if img is None:
+                continue
 
-                img = self.load_image(image_path)
+            images.append(img)
+            labels.append(label)
 
-                if img is not None:
-                    images.append(img)
-                    labels.append(label)
-                else:
-                    failed_count += 1
+            if i % 500 == 0:
+                print(f"Processed {i} images...")
 
-                if (i + 1) % 200 == 0:
-                    logger.info(f"Processed {i + 1} images")
+        if len(images) == 0:
+            raise ValueError("❌ No images processed. Check dataset path.")
 
-        else:
+        images = np.array(images, dtype=np.float32)
+        labels = np.array(labels, dtype=np.int32)
 
-            for image_path in images_dir.rglob("*"):
+        print(f"INFO: Loaded {len(images)} images")
 
-                if image_path.suffix.lower() in [".png", ".jpg", ".jpeg"]:
-
-                    img = self.load_image(image_path)
-
-                    if img is not None:
-                        images.append(img)
-
-        images_array = np.array(images, dtype=np.float32)
-        labels_array = np.array(labels, dtype=np.int32) if labels else None
-
-        logger.info(
-            f"Preprocessing complete. Images: {len(images)}, Failed: {failed_count}"
-        )
-
-        if images_array.size == 0:
-            logger.error("No images processed. Check dataset paths.")
-            return images_array, labels_array
-
-        logger.info(f"Images shape: {images_array.shape}")
-
-        if save_processed:
-            self.save_processed_data(images_array, labels_array)
-
-        return images_array, labels_array
+        return images, labels
 
     # ---------------------------------------------------
-    # DATASET SPLIT
+    # Save Data
     # ---------------------------------------------------
+    def save_data(self, images, labels):
+        save_dir = Path(Config.PROCESSED_DATA_DIR)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-    def split_dataset(
-        self,
-        images: np.ndarray,
-        labels: np.ndarray,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        random_state: int = 42,
-    ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+        np.save(Config.PROCESSED_IMAGES, images)
+        np.save(Config.PROCESSED_LABELS, labels)
 
-        X_temp, X_test, y_temp, y_test = train_test_split(
-            images,
-            labels,
-            test_size=test_ratio,
-            random_state=random_state,
-            stratify=labels,
-        )
-
-        val_ratio_adjusted = val_ratio / (train_ratio + val_ratio)
-
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_temp,
-            y_temp,
-            test_size=val_ratio_adjusted,
-            random_state=random_state,
-            stratify=y_temp,
-        )
-
-        splits = {
-            "train": (X_train, y_train),
-            "val": (X_val, y_val),
-            "test": (X_test, y_test),
-        }
-
-        logger.info(
-            f"Train: {X_train.shape[0]}, Val: {X_val.shape[0]}, Test: {X_test.shape[0]}"
-        )
-
-        return splits
+        print(f"INFO: Saved images → {Config.PROCESSED_IMAGES}")
+        print(f"INFO: Saved labels → {Config.PROCESSED_LABELS}")
 
     # ---------------------------------------------------
-    # SAVE DATA
+    # Run Pipeline
     # ---------------------------------------------------
+    def run(self):
+        images, labels = self.preprocess_dataset()
+        self.save_data(images, labels)
 
-    def save_processed_data(
-        self,
-        images: np.ndarray,
-        labels: Optional[np.ndarray] = None
-    ) -> None:
-
-        try:
-
-            np.save(self.processed_data_dir / "images.npy", images)
-
-            logger.info("Saved processed images")
-
-            if labels is not None:
-                np.save(self.processed_data_dir / "labels.npy", labels)
-                logger.info("Saved labels")
-
-        except Exception as e:
-            logger.error(f"Error saving processed data: {str(e)}")
-
-    # ---------------------------------------------------
-    # LOAD DATA
-    # ---------------------------------------------------
-
-    def load_processed_data(self):
-
-        try:
-
-            images = np.load(self.processed_data_dir / "images.npy")
-            labels = np.load(self.processed_data_dir / "labels.npy")
-
-            logger.info(
-                f"Loaded data. Images: {images.shape}, Labels: {labels.shape}"
-            )
-
-            return images, labels
-
-        except FileNotFoundError:
-
-            logger.warning("Processed dataset not found")
-
-            return None, None
-
-    # ---------------------------------------------------
-    # STREAMLIT PREPROCESSING
-    # ---------------------------------------------------
-
-    def preprocess_image_array(self, image: np.ndarray) -> np.ndarray:
-
-        img = image.copy()
-
-        img = self.crop_fundus(img)
-
-        img = self.ben_graham_preprocess(img)
-
-        img = self._resize_with_padding(img, self.image_size)
-
-        if self.normalize:
-            img = img.astype(np.float32) / 255.0
-
-        return img
+        print(f"✅ Preprocessing completed: {images.shape}")
 
 
 # ---------------------------------------------------
-# RUN PREPROCESSING
+# Entry
 # ---------------------------------------------------
+def main():
+    preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
+    preprocessor.run()
+
 
 if __name__ == "__main__":
-
-    logger.info("Starting preprocessing pipeline")
-
-    preprocessor = DataPreprocessor(image_size=Config.IMAGE_SIZE)
-
-    images_dir = Config.IMAGES_DIR
-    labels_file = Config.LABELS_FILE
-
-    labels_df = pd.read_csv(labels_file)
-
-    images, labels = preprocessor.preprocess_dataset(
-        images_dir=images_dir,
-        labels_df=labels_df,
-        save_processed=True
-    )
-
-    logger.info("Preprocessing completed")
-
-    if images is not None:
-        logger.info(f"Processed images: {images.shape}")
+    main()

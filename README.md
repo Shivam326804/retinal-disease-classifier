@@ -1,186 +1,145 @@
-﻿# AI Retinal Disease Classifier
+﻿# AI-Based Diabetic Retinopathy Screening System
 
-A full-stack system for automated **Diabetic Retinopathy** screening using retinal fundus images. The project combines a transfer-learned EfficientNetB3 classifier with a production-style FastAPI backend, a Streamlit frontend, Grad-CAM explainability, and PDF medical report generation.
+A comprehensive AI-powered solution for automated screening of diabetic retinopathy using retinal fundus images. This system combines deep learning classification with explainable AI, medical report generation, and a production-ready API for clinical deployment.
 
-## 🚀 Overview
+## Demo / Screenshots
 
-This repository implements a practical clinical screening pipeline for Diabetic Retinopathy severity classification using:
+### Home UI
+![Home UI](assets/home_ui.png)
 
-- **EfficientNetB3** with transfer learning
-- **260×260** fundus image input
-- **5 disease severity classes**
-- **CLAHE preprocessing**
-- **Test-Time Augmentation (TTA)**
-- **Probability calibration**
-- **Grad-CAM explainability**
-- **FastAPI backend with SQLite usage tracking**
-- **Streamlit frontend for local and API-driven prediction**
-- **PDF medical report generation**
+### Prediction UI
+![Prediction UI](assets/prediction_ui.png)
 
-## ✨ Key Features
+### Probability Distribution
+![Probability Distribution](assets/probability_chart.png)
 
-- Retinal image preprocessing with **CLAHE** and EfficientNet standard normalization
-- **EfficientNetB3** inference with a custom classifier head
-- **5-target classification**: No DR, Mild NPDR, Moderate NPDR, Severe NPDR, Proliferative DR
-- **TTA ensemble** for robust prediction across flipped, rotated, and brightness-adjusted variants
-- **Probability calibration** to improve severity attribution
-- **Grad-CAM heatmaps** for model interpretability
-- FastAPI SaaS-ready backend with **API key authentication**
-- **SQLite usage tracking** for API requests
-- Streamlit UI with image upload, prediction visualization, Grad-CAM view, and **hospital-style PDF report export**
+### Grad-CAM Visualization
+![GradCAM](assets/gradcam.png)
 
-## 🧩 System Architecture
+### Medical Report
+![Medical Report](assets/report_preview.png)
 
-```
-User Image Upload
-        │
-        ▼
- Streamlit App ───────────────┐
-        │                      │
-        ▼                      │
-   Predictor / Local Model     │
-        │                      │
-        ▼                      │
-   CLAHE → Resize → Normalize  │
-        │                      │
-        ▼                      │
-   TTA → Model Ensemble        │
-        │                      │
-        ▼                      │
-   Calibrated Probabilities   │
-        │                      │
-        ▼                      │
-   Prediction + Grad-CAM       │
-        │                      │
-        ▼                      │
-   PDF Medical Report Export   │
+## Project Highlights
 
-Optional SaaS Mode → FastAPI Backend → SQLite Usage DB
+- **Explainable AI**: Integrated Grad-CAM for transparent model decisions
+- **End-to-End Pipeline**: From image upload to automated PDF reports
+- **SaaS-Ready Backend**: FastAPI with authentication and usage tracking
+- **Automated Reporting**: Clinical-style PDF generation for medical workflows
+
+## Features
+
+- Retinal disease classification across 5 severity classes (No DR, Mild NPDR, Moderate NPDR, Severe NPDR, Proliferative DR)
+- Confidence scoring with calibrated probabilities
+- Test-Time Augmentation (TTA) for robust predictions
+- Grad-CAM heatmaps for model interpretability
+- AI-generated medical reports in PDF format
+- SaaS API mode with API key authentication
+- Usage tracking via SQLite database
+
+## Architecture
+
+```mermaid
+graph TD
+    A[User] --> B[Streamlit UI]
+    B --> C[FastAPI Backend]
+    C --> D[EfficientNet Model]
+    D --> E[Grad-CAM Generator]
+    D --> F[Report Generator]
+    C --> G[SQLite Database]
+    G -.-> H[Usage Tracking]
 ```
 
-## 📦 Installation
+## Model Performance
 
-### Local Setup
+The model achieves strong performance on diabetic retinopathy classification, with particular strength in detecting no disease and moderate cases. Test-Time Augmentation and probability calibration enhance reliability across all severity levels.
 
+### Confusion Matrix
+![Confusion Matrix](reports/confusion_matrix_final.png)
+
+### Classification Report
+
+| Class              | Precision | Recall | F1-Score | Support |
+|--------------------|-----------|--------|----------|---------|
+| No DR             | 0.9493   | 0.9850 | 0.9668  | 1805   |
+| Mild NPDR         | 0.7607   | 0.5757 | 0.6554  | 370    |
+| Moderate NPDR     | 0.7672   | 0.8709 | 0.8158  | 999    |
+| Severe NPDR       | 0.6531   | 0.4974 | 0.5647  | 193    |
+| Proliferative DR  | 0.7061   | 0.5458 | 0.6157  | 295    |
+
+**Overall Accuracy**: 85.14%  
+**Macro Average**: Precision: 0.7673, Recall: 0.6950, F1-Score: 0.7237  
+**Weighted Average**: Precision: 0.8454, Recall: 0.8514, F1-Score: 0.8447
+
+## How to Run
+
+### Clone Repository
 ```bash
 git clone https://github.com/Shivam326804/retinal-disease-classifier.git
 cd retinal-disease-classifier
+```
+
+### Install Dependencies
+```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Model and Data
-
-- Ensure `models/final_model.keras` exists before inference.
-- Raw dataset should be placed under `data/raw/APTOS_2019/`.
-- Processed arrays are stored in `data/processed/` after preprocessing.
-
-## ▶️ Running the Backend
-
-### Start FastAPI
-
-```bash
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Or run directly
-
-```bash
-python -m src.api.main
-```
-
-## ▶️ Running the Streamlit Frontend
-
+### Run Frontend
 ```bash
 streamlit run streamlit_app/app.py
 ```
 
-## 🧪 Usage
+### Run Backend
+```bash
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-### Local prediction
+## Folder Structure
 
-Upload an image in the Streamlit interface and view the predicted DR severity, confidence score, probability distribution, and Grad-CAM overlay.
+```
+retinal_disease_classifier/
+├── assets/                 # UI screenshots and assets
+├── data/                   # Raw and processed datasets
+├── models/                 # Trained model checkpoints
+├── reports/                # Evaluation reports and confusion matrices
+├── src/                    # Source code
+│   ├── api/                # FastAPI backend
+│   ├── inference/          # Prediction and Grad-CAM logic
+│   ├── reports/            # PDF report generation
+│   └── utils/              # Configuration and utilities
+├── streamlit_app/          # Streamlit frontend
+├── tests/                  # Unit tests
+├── docker/                 # Docker configuration
+└── README.md
+```
 
-### API SaaS mode
+## Future Improvements
 
-1. Enable **Use API (SaaS Mode)** in the Streamlit sidebar
-2. Provide a valid `x-api-key`
-3. Upload an image and run prediction through the FastAPI backend
+- Model optimization for edge devices and real-time processing
+- Cloud deployment with containerization and scaling
+- Integration with electronic health records (EHR) systems
+- Clinical validation studies and regulatory compliance
 
-### Generate PDF report
+## Usage
 
-From the Streamlit app, click **Generate Hospital Report** to download a clinical-style PDF containing:
+### Local Prediction
+Upload an image in the Streamlit interface to view predictions, confidence scores, probability distributions, and Grad-CAM overlays.
 
-- Prediction summary
-- Confidence score
-- Class probabilities
-- Input fundus image
-- Optional Grad-CAM attention map
+### API SaaS Mode
+Enable API mode in the Streamlit sidebar, provide an API key, and run predictions through the FastAPI backend.
 
-## 🧠 API Endpoints
+### Generate PDF Report
+Click "Generate Hospital Report" in the Streamlit app to download a clinical PDF with diagnosis summary, images, and Grad-CAM if available.
 
-### `POST /login`
-- Request: `username`, `password`
-- Response: `api_key`
+## API Endpoints
 
-### `GET /health-check`
-- Response: service status and model load state
+- `POST /login`: Authenticate and get API key
+- `GET /health-check`: Check service status
+- `GET /usage`: View API usage statistics
+- `POST /predict`: Upload image and get prediction
+- `POST /predict-with-gradcam`: Get prediction with Grad-CAM visualization
 
-### `GET /usage`
-- Header: `x-api-key`
-- Response: total requests, successful requests, failed requests
+## Notes
 
-### `POST /predict`
-- Header: `x-api-key`
-- Multipart: `file` image upload
-- Response: predicted disease, confidence, probabilities, Grad-CAM availability
-
-### `POST /predict-with-gradcam`
-- Header: `x-api-key`
-- Multipart: `file` image upload
-- Response: predicted disease, confidence, probabilities, optional Grad-CAM image
-
-## 🔍 Grad-CAM Explainability
-
-The project uses Grad-CAM to generate a heatmap over the retinal image, highlighting regions that contributed most to the model's classification decision. Grad-CAM is available in local Streamlit mode and the `/predict-with-gradcam` API endpoint when the model architecture supports it.
-
-## 🩺 Medical Report Feature
-
-A hospital-style PDF report is generated using `reportlab`.
-The report includes:
-
-- DR diagnosis summary
-- Confidence score
-- Class probability table
-- Input image
-- Optional Grad-CAM attention map
-
-## 📊 Model Performance
-
-![Confusion Matrix](reports/confusion_matrix_final.png)
-
-- **Accuracy**: ~85%
-- **Class imbalance** is present across the 5 DR severity labels
-- **Test-Time Augmentation + probability calibration** improve the prediction stability for severe classes
-
-## 📁 Project Structure
-
-- `src/api/main.py` — FastAPI application with authentication and request logging
-- `src/inference/predictor.py` — EfficientNetB3 inference, CLAHE, TTA, and calibration
-- `src/inference/grad_cam.py` — Grad-CAM heatmap generation
-- `src/reports/medical_report.py` — PDF report generation
-- `src/utils/config.py` — central application configuration
-- `streamlit_app/app.py` — Streamlit frontend
-- `models/final_model.keras` — trained model checkpoint
-- `data/raw/APTOS_2019/` — raw dataset files
-- `data/processed/` — processed images and labels
-
-## 📌 Notes
-
-- The system is intended for **screening and research** only.
-- It is not a substitute for clinical diagnosis.
-
-## 🤝 Contributing
-
-Contributions are welcome. Please open a pull request with bug fixes, enhancements, or documentation improvements.
+This system is for screening and research purposes only. It is not a substitute for professional medical diagnosis. Always consult healthcare professionals for clinical decisions.

@@ -1,9 +1,5 @@
-"""
-Streamlit Web Application - FINAL FIXED VERSION
-"""
-
 # ---------------------------------------------------
-# SYSTEM FIXES
+# SYSTEM
 # ---------------------------------------------------
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -21,260 +17,288 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from PIL import Image
-from typing import Optional, Tuple
+from datetime import datetime
+import requests
+import cv2
 
 from src.utils.config import Config
 from src.inference.predictor import Predictor
 from src.inference.grad_cam import GradCAMVisualizer
 
+# SAFE IMPORT
+try:
+    from src.reports.medical_report import generate_medical_report
+    REPORT_AVAILABLE = True
+except:
+    generate_medical_report = None
+    REPORT_AVAILABLE = False
+
 # ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
 st.set_page_config(
-    page_title="Retinal Disease Classifier",
-    page_icon="👁️",
+    page_title="DR Screening AI",
+    page_icon="🧠",
     layout="wide"
 )
 
 # ---------------------------------------------------
-# STYLE
-# ---------------------------------------------------
-st.markdown("""
-<style>
-.stApp { background-color: #0b1220; }
-h1, h2, h3 { color: white; }
-.block-container { padding-top: 2rem; }
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# LOAD MODEL
+# LOAD LOCAL MODEL
 # ---------------------------------------------------
 @st.cache_resource
-def load_model() -> Tuple[Optional[Predictor], Optional[GradCAMVisualizer]]:
-    model_path = Config.get_model_path()
+def load_system():
+    predictor = Predictor(model_path=str(Config.get_model_path()))
 
-    if model_path is None:
-        return None, None
-
-    predictor = Predictor(
-        model_path=str(model_path),
-        class_names=Config.DISEASE_CLASSES
-    )
-
-    gradcam = GradCAMVisualizer(predictor.model)
+    gradcam = None
+    try:
+        gradcam = GradCAMVisualizer(predictor.get_model())
+    except Exception as e:
+        print("GradCAM disabled:", e)
 
     return predictor, gradcam
 
 
-predictor, gradcam = load_model()
+predictor, gradcam = load_system()
 
 # ---------------------------------------------------
-# SAFETY CHECK (CRITICAL FIX)
+# API CALL
 # ---------------------------------------------------
-if predictor is None or gradcam is None:
-    st.error("❌ No trained model found. Train model first.")
-    st.stop()
+def api_predict(image, api_key):
+    url = "http://localhost:8000/predict"
 
-# 👇 Tell Pylance these are NOT None anymore
-assert predictor is not None
-assert gradcam is not None
+    _, img_encoded = cv2.imencode(".jpg", image)
+
+    files = {
+        "file": ("image.jpg", img_encoded.tobytes(), "image/jpeg")
+    }
+
+    headers = {
+        "x-api-key": api_key
+    }
+
+    response = requests.post(url, files=files, headers=headers)
+
+    if response.status_code != 200:
+        raise Exception(response.text)
+
+    return response.json()
 
 # ---------------------------------------------------
-# SESSION
+# STATE
 # ---------------------------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
+if "last_file" not in st.session_state:
+    st.session_state.last_file = None
+
 # ---------------------------------------------------
-# NAVIGATION
+# SIDEBAR
 # ---------------------------------------------------
+st.sidebar.title("🧭 Navigation")
+
 page = st.sidebar.radio(
-    "Navigation",
-    ["Home", "Prediction", "Confusion Matrix", "History", "About"]
+    "Go to",
+    ["🏠 Home", "🔍 Prediction", "📜 History", "ℹ️ About"]
 )
+
+st.sidebar.subheader("🔐 API Settings")
+api_mode = st.sidebar.checkbox("Use API (SaaS Mode)")
+api_key = st.sidebar.text_input("API Key", type="password")
 
 # ---------------------------------------------------
 # HOME
 # ---------------------------------------------------
-if page == "Home":
-    st.title("👁️ Retinal Disease AI Classifier")
+if page == "🏠 Home":
+
+    st.title("🧠 Diabetic Retinopathy Screening AI")
 
     st.markdown("""
-Deep learning model to detect diabetic retinopathy.
+### Detect severity of diabetic retinopathy
 
-### Classes:
-- No DR
-- Mild NPDR
-- Moderate NPDR
-- Severe NPDR
-- Proliferative DR
+✔ Local + SaaS prediction  
+✔ Confidence score  
+✔ Grad-CAM visualization  
+✔ Medical report export  
+✔ History tracking  
 """)
 
 # ---------------------------------------------------
 # PREDICTION
 # ---------------------------------------------------
-elif page == "Prediction":
+elif page == "🔍 Prediction":
 
     st.title("🔍 Analyze Retinal Image")
 
-    uploaded_file = st.file_uploader(
-        "Upload Fundus Image",
-        type=["jpg", "jpeg", "png"]
-    )
+    file = st.file_uploader("Upload Fundus Image", type=["png","jpg","jpeg"])
 
-    if uploaded_file:
+    if file:
 
-        image = Image.open(uploaded_file).convert("RGB")
+        image = Image.open(file).convert("RGB")
         image_np = np.array(image)
 
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([2,1])
 
         with col1:
-            st.image(image, caption="Uploaded Image", width="stretch")
+            st.image(image_np, caption="Uploaded Image", width="stretch")
 
-        with st.spinner("🔄 Analyzing..."):
-
+        # -------------------------
+        # PREDICTION
+        # -------------------------
+        with st.spinner("🧠 Analyzing..."):
             try:
-                pred, conf, probs = predictor.predict(image_np)
+                if api_mode and api_key:
+                    res = api_predict(image_np, api_key)
+
+                    label = res["predicted_disease"]
+                    conf = res["confidence"]
+                    probs = list(res["probabilities"].values())
+                else:
+                    label, conf, probs = predictor.predict(image_np)
+
             except Exception as e:
-                st.error(f"Prediction failed: {e}")
+                st.error(f"Prediction failed: {str(e)}")
                 st.stop()
 
-        # RESULT
+        class_id = int(np.argmax(probs))
+
+        risk_map = {
+            0: "Low Risk 🟢",
+            1: "Moderate Risk 🟡",
+            2: "Moderate Risk 🟡",
+            3: "High Risk 🔴",
+            4: "High Risk 🔴"
+        }
+        risk = risk_map[class_id]
+
         with col2:
-            st.success(pred)
-            st.metric("Confidence", f"{conf * 100:.2f}%")
-
-        st.divider()
-
-        # TABLE
-        st.subheader("📊 Prediction Breakdown")
-
-        df = pd.DataFrame({
-            "Disease": list(Config.DISEASE_CLASSES.values()),
-            "Probability (%)": (probs * 100).round(2)
-        }).sort_values(by="Probability (%)", ascending=False)
-
-        st.dataframe(df, width="stretch")
-
-        # CHART
-        st.subheader("📈 Confidence Distribution")
-        st.bar_chart(df.set_index("Disease"))
-
-        # ---------------------------------------------------
-        # GRAD-CAM (FIXED SAFE CHECK)
-        # ---------------------------------------------------
-        st.subheader("🔥 Model Attention (Grad-CAM)")
-
-        try:
-            processed_img = predictor.preprocess(image_np)
-
-            heatmap = gradcam.generate_cam(
-                processed_img,
-                class_idx=int(np.argmax(probs))
+            st.markdown(
+                f"<div style='padding:15px;background:#111;border-radius:10px;color:white'>{label}</div>",
+                unsafe_allow_html=True
             )
 
-            overlay = gradcam.overlay_heatmap(image_np, heatmap)
+            st.metric("Confidence", f"{conf*100:.2f}%")
+            st.progress(float(conf))
+            st.write(f"### {risk}")
 
-            c1, c2 = st.columns(2)
+        # ---------------------------------------------------
+        # PROBABILITY
+        # ---------------------------------------------------
+        st.subheader("📊 Probability Distribution")
 
-            with c1:
-                st.image(image, caption="Original", width="stretch")
-
-            with c2:
-                st.image(overlay, caption="Grad-CAM", width="stretch")
-
-        except Exception as e:
-            st.warning(f"Grad-CAM failed: {e}")
-
-        # INFO
-        st.info(f"""
-Prediction: **{pred}**  
-Confidence: **{conf*100:.2f}%**
-
-⚠️ Not a medical diagnosis.
-""")
-
-        # SAVE HISTORY
-        st.session_state.history.append({
-            "image": uploaded_file.name,
-            "prediction": pred,
-            "confidence": f"{conf*100:.2f}%"
+        df = pd.DataFrame({
+            "Class": predictor.get_classes(),
+            "Probability": probs
         })
 
-# ---------------------------------------------------
-# CONFUSION MATRIX
-# ---------------------------------------------------
-elif page == "Confusion Matrix":
+        st.bar_chart(df.set_index("Class"))
 
-    st.title("📊 Model Evaluation")
+        # ---------------------------------------------------
+        # GRAD-CAM (LOCAL ONLY)
+        # ---------------------------------------------------
+        st.subheader("🔥 AI Attention Map")
 
-    try:
-        import seaborn as sns
-        import matplotlib.pyplot as plt
-        from sklearn.metrics import confusion_matrix, classification_report
+        heatmap = None
 
-        images = np.load(Config.PROCESSED_IMAGES)
-        labels = np.load(Config.PROCESSED_LABELS)
+        if not api_mode and gradcam is not None:
+            try:
+                processed = predictor.preprocess(image_np)
+                processed = np.expand_dims(processed, axis=0)
 
-        st.info(f"Loaded {len(images)} samples")
+                heatmap = gradcam.generate_cam(processed)
+                overlay = gradcam.overlay_heatmap(image_np, heatmap)
 
-        preds = predictor.predict_batch(images)
-        pred_labels = np.argmax(preds, axis=1)
+                c1, c2 = st.columns(2)
 
-        cm = confusion_matrix(labels, pred_labels)
+                with c1:
+                    st.image(image_np, caption="Original", width="stretch")
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            xticklabels=Config.CLASS_NAMES,
-            yticklabels=Config.CLASS_NAMES
-        )
+                with c2:
+                    st.image(overlay, caption="Grad-CAM", width="stretch")
 
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Actual")
-        ax.set_title("Confusion Matrix")
+            except Exception as e:
+                st.error(f"Grad-CAM error: {str(e)}")
+        else:
+            st.info("Grad-CAM available only in local mode")
 
-        st.pyplot(fig)
+        st.info("⚠️ AI screening tool. Not a medical diagnosis.")
 
-        report = classification_report(
-            labels,
-            pred_labels,
-            target_names=Config.CLASS_NAMES,
-            output_dict=True
-        )
+        # ---------------------------------------------------
+        # REPORT
+        # ---------------------------------------------------
+        st.subheader("📄 Medical Report")
 
-        st.dataframe(pd.DataFrame(report).transpose(), width="stretch")
+        if not REPORT_AVAILABLE:
+            st.warning("Install 'reportlab' to enable report download")
+        else:
+            if st.button("Generate Hospital Report"):
+                with st.spinner("Generating report..."):
+                    try:
+                        pdf_path = generate_medical_report(
+                            image=image_np,
+                            prediction=label,
+                            confidence=conf,
+                            probabilities=probs,
+                            class_names=predictor.get_classes(),
+                            heatmap=heatmap
+                        )
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button(
+                                label="⬇ Download Report",
+                                data=f,
+                                file_name="DR_Report.pdf",
+                                mime="application/pdf"
+                            )
+
+                    except Exception as e:
+                        st.error(f"Report generation failed: {str(e)}")
+
+        # ---------------------------------------------------
+        # HISTORY
+        # ---------------------------------------------------
+        if st.session_state.last_file != file.name:
+            st.session_state.history.append({
+                "Time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                "Image": file.name,
+                "Prediction": label,
+                "Confidence": f"{conf*100:.2f}%"
+            })
+            st.session_state.last_file = file.name
 
 # ---------------------------------------------------
 # HISTORY
 # ---------------------------------------------------
-elif page == "History":
+elif page == "📜 History":
 
     st.title("📜 Prediction History")
 
-    if not st.session_state.history:
-        st.info("No predictions yet")
+    if len(st.session_state.history) == 0:
+        st.info("No predictions yet.")
     else:
-        st.dataframe(pd.DataFrame(st.session_state.history), width="stretch")
+        df = pd.DataFrame(st.session_state.history)
+        st.dataframe(df, width="stretch")
+
+        st.download_button(
+            "⬇ Download CSV",
+            data=df.to_csv(index=False),
+            file_name="history.csv",
+            mime="text/csv"
+        )
 
 # ---------------------------------------------------
 # ABOUT
 # ---------------------------------------------------
-elif page == "About":
+else:
 
-    st.title("ℹ️ About")
+    st.title("ℹ️ About Project")
 
-    st.write("""
-Model: EfficientNet  
-Task: Diabetic Retinopathy Classification  
+    st.markdown("""
+### Diabetic Retinopathy Classification
 
-This system analyzes retinal images using deep learning.
+- Dataset: APTOS 2019  
+- Model: EfficientNetB3  
+- Framework: TensorFlow + Streamlit + FastAPI  
+
+Hybrid Local + SaaS AI system.
 """)

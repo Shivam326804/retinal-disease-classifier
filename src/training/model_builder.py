@@ -1,7 +1,3 @@
-"""
-Model Builder Module - FINAL STABLE + HIGH-ACCURACY VERSION
-"""
-
 import tensorflow as tf
 from typing import Tuple
 from contextlib import redirect_stdout
@@ -13,140 +9,123 @@ logger = setup_logger(__name__)
 
 layers = tf.keras.layers
 models = tf.keras.models
-optimizers = tf.keras.optimizers
 applications = tf.keras.applications
+optimizers = tf.keras.optimizers
+regularizers = tf.keras.regularizers
 
-
-# ---------------------------------------------------
-# 🔥 FIXED FOCAL LOSS (NO SHAPE BUG)
-# ---------------------------------------------------
-
-def focal_loss(gamma=2.0, alpha=0.25):
-    def loss(y_true, y_pred):
-
-        # ✅ ensure shape = (batch,)
-        y_true = tf.squeeze(y_true)
-
-        # ✅ convert to int
-        y_true = tf.cast(y_true, tf.int32)
-
-        # ✅ one-hot encode correctly
-        y_true = tf.one_hot(y_true, depth=tf.shape(y_pred)[-1])
-
-        # Clip predictions (prevents NaN)
-        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0)
-
-        ce = -y_true * tf.math.log(y_pred)
-        ce = tf.reduce_sum(ce, axis=-1)
-
-        prob = tf.reduce_sum(y_true * y_pred, axis=-1)
-
-        loss_val = alpha * tf.pow(1 - prob, gamma) * ce
-
-        return tf.reduce_mean(loss_val)
-
-    return loss
-
-
-# ---------------------------------------------------
-# MODEL BUILDER
-# ---------------------------------------------------
 
 class ModelBuilder:
-    """Builds CNN architectures for retinal disease classification"""
 
     def __init__(
         self,
-        input_shape: Tuple[int, int, int] = (224, 224, 3),
+        input_shape: Tuple[int, int, int] = (260, 260, 3),
         num_classes: int = 5
     ):
         self.input_shape = input_shape
         self.num_classes = num_classes
+        self.base_model = None
 
     # ---------------------------------------------------
-    # 🔥 STAGE 1 MODEL (FROZEN BACKBONE)
+    # BUILD MODEL
     # ---------------------------------------------------
+    def build_model(self) -> tf.keras.Model:
 
-    def build_efficientnet(self) -> tf.keras.Model:
-        """Stage 1: Train classification head only"""
+        print("🔄 Loading EfficientNetB3...")
 
-        base_model = applications.EfficientNetB0(
+        base_model = applications.EfficientNetB3(
             weights="imagenet",
             include_top=False,
             input_shape=self.input_shape
         )
 
-        # ✅ freeze backbone
-        for layer in base_model.layers[:-50]:
-            layer.trainable = False
+        print("✅ EfficientNetB3 loaded")
 
-        for layer in base_model.layers[-50:]:
-            layer.trainable = True
+        base_model.trainable = False
+        self.base_model = base_model
 
-        x = base_model.output
+        inputs = layers.Input(shape=self.input_shape)
 
+        x = tf.cast(inputs, tf.float32)
+        x = applications.efficientnet.preprocess_input(x)
+
+        # Keep BN stable
+        x = base_model(x, training=False)
+
+        # HEAD
         x = layers.GlobalAveragePooling2D()(x)
         x = layers.BatchNormalization()(x)
 
-        x = layers.Dense(512, activation="relu")(x)
+        x = layers.Dense(
+            256,
+            activation="relu",
+            kernel_initializer="he_normal",
+            kernel_regularizer=regularizers.l2(1e-4)
+        )(x)
+        x = layers.BatchNormalization()(x)
         x = layers.Dropout(0.5)(x)
 
-        x = layers.Dense(256, activation="relu")(x)
+        x = layers.Dense(
+            128,
+            activation="relu",
+            kernel_initializer="he_normal",
+            kernel_regularizer=regularizers.l2(1e-4)
+        )(x)
+        x = layers.BatchNormalization()(x)
         x = layers.Dropout(0.4)(x)
 
-        x = layers.Dense(128, activation="relu")(x)
-        x = layers.Dropout(0.3)(x)
+        outputs = layers.Dense(self.num_classes, activation="softmax")(x)
 
-        outputs = layers.Dense(
-            self.num_classes,
-            activation="softmax"
-        )(x)
+        model = models.Model(inputs, outputs)
 
-        model = models.Model(
-            inputs=base_model.input,
-            outputs=outputs
-        )
-
-        # ✅ compile with FIXED focal loss
-        model.compile(
-            optimizer=optimizers.Adam(learning_rate=1e-4),
-            loss=focal_loss(),
-            metrics=["accuracy"]
-        )
-
-        logger.info("🔥 Stage-1 EfficientNet created (frozen backbone)")
-
+        logger.info("🔥 Model built (EfficientNetB3 FINAL)")
         return model
 
     # ---------------------------------------------------
-    # 🔥 STAGE 2: FINE-TUNING
+    # FINE TUNE
     # ---------------------------------------------------
+    def fine_tune_model(self, model, unfreeze_layers=180):
 
-    def fine_tune_model(self, model: tf.keras.Model) -> tf.keras.Model:
-        """Stage 2: Unfreeze top layers"""
+        logger.info("🔓 Fine-tuning...")
 
-        logger.info("🔓 Starting fine-tuning...")
+        for layer in self.base_model.layers:
+            layer.trainable = False
 
-        # Unfreeze last 30 layers
-        for layer in model.layers[-30:]:
-            layer.trainable = True
+        for layer in self.base_model.layers[-unfreeze_layers:]:
+            if not isinstance(layer, tf.keras.layers.BatchNormalization):
+                layer.trainable = True
 
-        model.compile(
-            optimizer=optimizers.Adam(learning_rate=1e-5),
-            loss=focal_loss(),
-            metrics=["accuracy"]
-        )
-
+        logger.info(f"✅ Unfroze last {unfreeze_layers} layers")
         return model
 
     # ---------------------------------------------------
-    # MODEL SUMMARY
+    # COMPILE
     # ---------------------------------------------------
+    def compile_model(self, model, lr=1e-4, loss_fn=None):
 
-    def get_model_summary(self, model: tf.keras.Model) -> str:
+        if loss_fn is None:
+            loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
+
+        optimizer = optimizers.Adam(
+            learning_rate=lr,
+            clipnorm=1.0
+        )
+
+        model.compile(
+            optimizer=optimizer,
+            loss=loss_fn,
+            metrics=[
+                "accuracy",
+                tf.keras.metrics.SparseTopKCategoricalAccuracy(k=2, name="top2_acc"),
+                tf.keras.metrics.SparseTopKCategoricalAccuracy(k=3, name="top3_acc")
+            ]
+        )
+
+        logger.info(f"⚙️ Compiled (lr={lr})")
+        return model
+
+    # ---------------------------------------------------
+    def get_model_summary(self, model):
         stream = io.StringIO()
-
         with redirect_stdout(stream):
             model.summary()
-
         return stream.getvalue()

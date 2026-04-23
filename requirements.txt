@@ -1,29 +1,16 @@
-# Core Dependencies
 numpy==1.23.5
 pandas==2.3.3
 scikit-learn==1.7.2
-
-# Deep Learning
 tensorflow==2.13.0
-
-# Computer Vision
 opencv-python==4.7.0.72
 Pillow==12.2.0
-
-# Visualization
 matplotlib==3.10.8
 seaborn==0.13.0
-
-# Web & API
 streamlit==1.56.0
 fastapi==0.108.0
-pydantic==2.5.0
-
-# Utilities
-python-dotenv==1.2.2
-pyyaml==6.0.3
-tqdm==4.67.3
+uvicorn==0.23.2
+reportlab==3.6.14
 requests==2.33.1
-
-# Testing
-pytest==7.4.3
+pydantic==2.5.0
+python-dotenv==1.2.2
+tqdm==4.67.3

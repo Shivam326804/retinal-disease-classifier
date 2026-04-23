@@ -1,34 +1,55 @@
-"""
-FastAPI Application
-RESTful API for retinal disease classification
-"""
-
-import os
 import io
 import base64
 import numpy as np
 import cv2
+import os
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
 from PIL import Image
-from typing import Dict
+from typing import Dict, Optional
 from datetime import datetime
 
 from ..utils.logger import setup_logger
 from ..utils.config import Config
-from ..inference import Predictor, GradCAMVisualizer
+from ..inference.predictor import Predictor
+from ..inference.grad_cam import GradCAMVisualizer
+
+# 🔥 NEW (DB)
+from .database import (
+    init_db,
+    add_api_key,
+    validate_api_key,
+    log_usage,
+    get_usage
+)
 
 logger = setup_logger(__name__)
+
+# ---------------------------------------------------
+# 🔐 API KEY (ENV SAFE)
+# ---------------------------------------------------
+DEFAULT_API_KEY = os.getenv("DR_API_KEY", "dr_ai_secure_key_123")
+
+# ---------------------------------------------------
+# 🔐 AUTH
+# ---------------------------------------------------
+def verify_api_key(x_api_key: Optional[str] = Header(None)):
+
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API key missing")
+
+    if not validate_api_key(x_api_key):
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    return x_api_key
 
 
 # ---------------------------------------------------
 # RESPONSE MODELS
 # ---------------------------------------------------
-
 class HealthCheckResponse(BaseModel):
     status: str
     timestamp: str
@@ -43,26 +64,16 @@ class PredictionResponse(BaseModel):
     gradcam_available: bool
 
 
-class ModelInfoResponse(BaseModel):
-    model_name: str
-    num_classes: int
-    classes: Dict[str, str]
-    input_shape: tuple
-
-
 # ---------------------------------------------------
 # APP FACTORY
 # ---------------------------------------------------
-
 def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Retinal Disease Classification API",
-        description="AI-Based Retinal Disease Classification System",
-        version="1.0.0"
+        version="3.0.0"
     )
 
-    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -72,191 +83,185 @@ def create_app() -> FastAPI:
     )
 
     app.state.predictor = None
-    app.state.predictions_log = []
+    app.state.gradcam = None
 
     # ---------------------------------------------------
     # STARTUP
     # ---------------------------------------------------
-
     @app.on_event("startup")
     async def startup_event():
 
         try:
-            model_path = Config.MODEL_FULL_PATH
+            # 🔥 INIT DATABASE
+            init_db()
+            add_api_key(DEFAULT_API_KEY, "admin")
 
-            if model_path and model_path.exists():
-                app.state.predictor = Predictor(
-                    str(model_path),
-                    Config.DISEASE_CLASSES
-                )
-                logger.info(f"✅ Model loaded: {model_path}")
-            else:
-                logger.warning("❌ No model found in checkpoints")
+            model_path = Config.get_model_path()
+
+            predictor = Predictor(model_path=str(model_path))
+
+            gradcam = None
+            try:
+                gradcam = GradCAMVisualizer(predictor.get_model())
+            except Exception as e:
+                logger.warning(f"GradCAM disabled: {e}")
+
+            app.state.predictor = predictor
+            app.state.gradcam = gradcam
+
+            logger.info("✅ Backend ready (DB + Model loaded)")
 
         except Exception as e:
             logger.error(f"Startup error: {str(e)}")
 
     # ---------------------------------------------------
-    # HEALTH CHECK
+    # LOGIN (BASIC)
     # ---------------------------------------------------
+    @app.post("/login")
+    async def login(username: str, password: str):
 
+        if username == "admin" and password == "password123":
+            return {
+                "api_key": DEFAULT_API_KEY,
+                "message": "Login successful"
+            }
+
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # ---------------------------------------------------
+    # HEALTH
+    # ---------------------------------------------------
     @app.get("/health-check", response_model=HealthCheckResponse)
     async def health_check():
 
         return HealthCheckResponse(
             status="healthy" if app.state.predictor else "model_not_loaded",
             timestamp=datetime.now().isoformat(),
-            version="1.0.0"
+            version="3.0.0"
         )
 
     # ---------------------------------------------------
-    # MODEL INFO
+    # USAGE (DB)
     # ---------------------------------------------------
+    @app.get("/usage")
+    async def usage(api_key: str = Depends(verify_api_key)):
+        return get_usage(api_key)
 
-    @app.get("/model-info", response_model=ModelInfoResponse)
-    async def model_info():
+    # ---------------------------------------------------
+    # IMAGE LOADER
+    # ---------------------------------------------------
+    def load_image(contents):
 
-        if not app.state.predictor:
-            raise HTTPException(status_code=503, detail="Model not loaded")
-
-        model_file = os.path.basename(app.state.predictor.model_path)
-
-        classes_dict = {
-            str(k): v for k, v in Config.DISEASE_CLASSES.items()
-        }
-
-        return ModelInfoResponse(
-            model_name=model_file,
-            num_classes=Config.NUM_CLASSES,
-            classes=classes_dict,
-            input_shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3)
-        )
+        try:
+            image = Image.open(io.BytesIO(contents)).convert("RGB")
+            return np.array(image)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image file")
 
     # ---------------------------------------------------
     # PREDICT
     # ---------------------------------------------------
-
     @app.post("/predict", response_model=PredictionResponse)
-    async def predict(file: UploadFile = File(...)):
+    async def predict(
+        file: UploadFile = File(...),
+        api_key: str = Depends(verify_api_key)
+    ):
 
-        if not app.state.predictor:
-            raise HTTPException(status_code=503, detail="Model not loaded")
+        contents = await file.read()
+        image_np = load_image(contents)
 
         try:
-            contents = await file.read()
+            label, confidence, probs = app.state.predictor.predict(image_np)
 
-            image = Image.open(io.BytesIO(contents)).convert("RGB")
-            image = image.resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE))
+            prob_dict = {
+                cls: float(p)
+                for cls, p in zip(
+                    app.state.predictor.get_classes(),
+                    probs
+                )
+            }
 
-            image_array = np.array(image).astype(np.float32) / 255.0
-
-            predicted_class, confidence, probabilities = (
-                app.state.predictor.predict(image_array)
-            )
-
-            prob_dist = app.state.predictor.get_prediction_confidence_distribution(
-                probabilities
-            )
-
-            app.state.predictions_log.append({
-                "timestamp": datetime.now().isoformat(),
-                "filename": file.filename,
-                "prediction": predicted_class,
-                "confidence": confidence
-            })
+            log_usage(api_key, True)
 
             return PredictionResponse(
-                predicted_disease=predicted_class,
+                predicted_disease=label,
                 confidence=float(confidence),
-                probabilities=prob_dist,
+                probabilities=prob_dict,
                 timestamp=datetime.now().isoformat(),
-                gradcam_available=True
+                gradcam_available=app.state.gradcam is not None
             )
 
         except Exception as e:
             logger.error(str(e))
-            raise HTTPException(status_code=400, detail=str(e))
+            log_usage(api_key, False)
+            raise HTTPException(status_code=500, detail="Prediction failed")
 
     # ---------------------------------------------------
-    # PREDICT WITH GRADCAM
+    # PREDICT + GRADCAM
     # ---------------------------------------------------
-
     @app.post("/predict-with-gradcam")
-    async def predict_with_gradcam(file: UploadFile = File(...)):
+    async def predict_with_gradcam(
+        file: UploadFile = File(...),
+        api_key: str = Depends(verify_api_key)
+    ):
 
-        if not app.state.predictor:
-            raise HTTPException(status_code=503, detail="Model not loaded")
+        contents = await file.read()
+        image_np = load_image(contents)
 
         try:
-            contents = await file.read()
+            label, confidence, probs = app.state.predictor.predict(image_np)
 
-            image = Image.open(io.BytesIO(contents)).convert("RGB")
-            image = image.resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE))
-
-            image_array = np.array(image).astype(np.float32) / 255.0
-
-            predicted_class, confidence, probabilities = (
-                app.state.predictor.predict(image_array)
-            )
+            prob_dict = {
+                cls: float(p)
+                for cls, p in zip(
+                    app.state.predictor.get_classes(),
+                    probs
+                )
+            }
 
             gradcam_b64 = None
 
-            try:
-                if app.state.predictor.model:
+            if app.state.gradcam:
+                try:
+                    processed = app.state.predictor.preprocess(image_np)
+                    processed = np.expand_dims(processed, axis=0)
 
-                    visualizer = GradCAMVisualizer(app.state.predictor.model)
+                    class_idx = int(np.argmax(probs))
 
-                    class_idx = int(np.argmax(probabilities))
-
-                    heatmap = visualizer.generate_cam(
-                        np.expand_dims(image_array, axis=0),
-                        class_idx
+                    heatmap = app.state.gradcam.generate_cam(
+                        processed, class_idx
                     )
 
-                    overlay = visualizer.overlay_heatmap(
-                        image_array,
-                        heatmap
+                    overlay = app.state.gradcam.overlay_heatmap(
+                        image_np, heatmap
                     )
 
-                    # ✅ Pylance-safe fix
-                    success, buffer = cv2.imencode(".png", overlay)  # type: ignore
+                    success, buffer = cv2.imencode(".png", overlay)
 
                     if success:
                         gradcam_b64 = base64.b64encode(
                             buffer.tobytes()
                         ).decode()
 
-            except Exception as e:
-                logger.warning(f"GradCAM failed: {str(e)}")
+                except Exception as e:
+                    logger.warning(f"GradCAM failed: {str(e)}")
 
-            prob_dist = app.state.predictor.get_prediction_confidence_distribution(
-                probabilities
-            )
+            log_usage(api_key, True)
 
             return JSONResponse(
                 content={
-                    "predicted_disease": predicted_class,
+                    "predicted_disease": label,
                     "confidence": float(confidence),
-                    "probabilities": prob_dist,
+                    "probabilities": prob_dict,
                     "timestamp": datetime.now().isoformat(),
                     "gradcam_image": gradcam_b64
                 }
             )
 
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    # ---------------------------------------------------
-    # PREDICTION LOG
-    # ---------------------------------------------------
-
-    @app.get("/predictions-log")
-    async def get_predictions_log():
-
-        return {
-            "total_predictions": len(app.state.predictions_log),
-            "predictions": app.state.predictions_log[-100:]
-        }
+            logger.error(str(e))
+            log_usage(api_key, False)
+            raise HTTPException(status_code=500, detail="Prediction failed")
 
     return app
 
@@ -264,21 +269,18 @@ def create_app() -> FastAPI:
 # ---------------------------------------------------
 # APP INSTANCE
 # ---------------------------------------------------
-
 app = create_app()
 
 
 # ---------------------------------------------------
 # RUN SERVER
 # ---------------------------------------------------
-
 if __name__ == "__main__":
 
     import uvicorn
 
     uvicorn.run(
         app,
-        host=Config.API_HOST,
-        port=Config.API_PORT,
-        reload=Config.DEBUG
+        host="0.0.0.0",
+        port=8000
     )

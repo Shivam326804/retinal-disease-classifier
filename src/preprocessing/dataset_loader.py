@@ -1,10 +1,9 @@
-"""
-Dataset Loader Module - FINAL HIGH-ACCURACY VERSION
-"""
-
 import numpy as np
 import tensorflow as tf
 from typing import Tuple
+
+from tensorflow.keras.applications.efficientnet import preprocess_input
+
 from ..utils.logger import setup_logger
 from ..utils.config import Config
 
@@ -12,7 +11,7 @@ logger = setup_logger(__name__)
 
 
 class DatasetLoader:
-    """Handles dataset loading, augmentation, and batching"""
+    """Handles dataset loading, augmentation, and batching (final optimized version)"""
 
     def __init__(self, batch_size: int = 32, image_size: int = 224):
         self.batch_size = batch_size
@@ -42,9 +41,14 @@ class DatasetLoader:
                 reshuffle_each_iteration=True
             )
 
+        dataset = dataset.map(
+            self._preprocess,
+            num_parallel_calls=tf.data.AUTOTUNE
+        )
+
         if augment:
             dataset = dataset.map(
-                self._augment_image,
+                self._augment,
                 num_parallel_calls=tf.data.AUTOTUNE
             )
 
@@ -54,34 +58,38 @@ class DatasetLoader:
         return dataset
 
     # ---------------------------------------------------
-    # 🔥 STRONG AUGMENTATION (MEDICAL SAFE)
+    # 🔥 PREPROCESS (CORRECT FOR EFFICIENTNET)
     # ---------------------------------------------------
 
-    def _augment_image(self, image, label):
+    def _preprocess(self, image, label):
 
-        # Horizontal flip (safe for retina)
+        image = tf.cast(image, tf.float32)
+
+        # EfficientNet preprocessing (VERY IMPORTANT)
+        image = preprocess_input(image)
+
+        return image, label
+
+    # ---------------------------------------------------
+    # 🔥 MEDICAL SAFE AUGMENTATION
+    # ---------------------------------------------------
+
+    def _augment(self, image, label):
+
+        # Flip (safe)
         image = tf.image.random_flip_left_right(image)
 
-        # Brightness / contrast
-        image = tf.image.random_brightness(image, max_delta=0.15)
-        image = tf.image.random_contrast(image, lower=0.8, upper=1.2)
+        # Mild brightness/contrast
+        image = tf.image.random_brightness(image, max_delta=0.1)
+        image = tf.image.random_contrast(image, 0.9, 1.1)
 
-        # Saturation (important for fundus images)
-        image = tf.image.random_saturation(image, lower=0.8, upper=1.2)
-
-        # Slight zoom (random crop + resize)
-        scale = tf.random.uniform([], 0.85, 1.0)
+        # Slight zoom
+        scale = tf.random.uniform([], 0.9, 1.0)
         new_size = tf.cast(scale * self.image_size, tf.int32)
 
         image = tf.image.resize(image, (self.image_size, self.image_size))
         image = tf.image.random_crop(image, size=[new_size, new_size, 3])
         image = tf.image.resize(image, (self.image_size, self.image_size))
-
-        # Add slight noise (helps generalization)
-        noise = tf.random.normal(shape=tf.shape(image), mean=0.0, stddev=0.01)
-        image = image + noise
-
-        image = tf.clip_by_value(image, 0.0, 1.0)
 
         return image, label
 
@@ -97,15 +105,6 @@ class DatasetLoader:
         val_labels,
         batch_size=32
     ) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
-
-        # ✅ Ensure float32
-        train_images = train_images.astype(np.float32)
-        val_images = val_images.astype(np.float32)
-
-        # ✅ Normalize
-        if train_images.max() > 1.0:
-            train_images /= 255.0
-            val_images /= 255.0
 
         loader = DatasetLoader(
             batch_size=batch_size,
@@ -129,7 +128,7 @@ class DatasetLoader:
         return train_dataset, val_dataset
 
     # ---------------------------------------------------
-    # 🔥 CLASS WEIGHTS (IMBALANCE FIX)
+    # CLASS WEIGHTS
     # ---------------------------------------------------
 
     @staticmethod
@@ -148,14 +147,11 @@ class DatasetLoader:
         return weights
 
     # ---------------------------------------------------
-    # OPTIONAL: BALANCED SAMPLING (ADVANCED)
+    # OPTIONAL BALANCING
     # ---------------------------------------------------
 
     @staticmethod
     def balance_dataset(images, labels):
-        """
-        Oversample minority classes (optional)
-        """
 
         unique_classes = np.unique(labels)
         max_count = max([np.sum(labels == c) for c in unique_classes])
@@ -178,6 +174,6 @@ class DatasetLoader:
         balanced_images = np.concatenate(balanced_images, axis=0)
         balanced_labels = np.concatenate(balanced_labels, axis=0)
 
-        logger.info("⚖️ Dataset balanced using oversampling")
+        logger.info("⚖️ Dataset balanced")
 
         return balanced_images, balanced_labels

@@ -1,166 +1,178 @@
-"""
-Prediction Module - FINAL CORRECT VERSION
-"""
-
 import numpy as np
 import tensorflow as tf
-from typing import Dict, Tuple, Optional
-from pathlib import Path
-import traceback
-
-from ..utils.logger import setup_logger
-from ..utils.config import Config
-
-logger = setup_logger(__name__)
+import cv2
+from typing import Tuple
 
 
 class Predictor:
-    """Handles model prediction tasks"""
 
-    def __init__(
-        self,
-        model_path: Optional[str] = None,
-        class_names: Optional[Dict[int, str]] = None
-    ):
-        # ✅ FIX: dynamic model path
-        self.model_path: str = str(model_path or Config.get_model_path())
+    def __init__(self, model_path: str = "models/final_model.keras"):
 
-        if isinstance(class_names, dict):
-            self.class_names = class_names
-        else:
-            self.class_names = Config.DISEASE_CLASSES
+        print("🔄 Loading model...")
 
-        self.model: Optional[tf.keras.Model] = None
+        self.model = tf.keras.models.load_model(
+            model_path,
+            compile=False
+        )
 
-        self.load_model()
+        print("✅ Model loaded successfully")
 
-    # ---------------------------------------------------
-    # LOAD MODEL
-    # ---------------------------------------------------
-    def load_model(self) -> bool:
-        try:
-            logger.info(f"🔄 Loading model from: {self.model_path}")
-
-            if not self.model_path or not Path(self.model_path).exists():
-                raise FileNotFoundError(f"Model not found: {self.model_path}")
-
-            self.model = tf.keras.models.load_model(
-                self.model_path,
-                compile=False
-            )
-
-            logger.info("✅ Model loaded successfully")
-
-            # Warmup
-            dummy = np.zeros(
-                (1, Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3),
-                dtype=np.float32
-            )
-
-            self.model.predict(dummy, verbose=0)
-
-            return True
-
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"❌ Model loading failed: {str(e)}")
-            self.model = None
-            return False
+        self.class_names = [
+            "No DR",
+            "Mild NPDR",
+            "Moderate NPDR",
+            "Severe NPDR",
+            "Proliferative DR"
+        ]
 
     # ---------------------------------------------------
-    # PREPROCESS INPUT (CRITICAL FIX)
+    # CLAHE
     # ---------------------------------------------------
-    def preprocess(self, image: np.ndarray) -> np.ndarray:
+    def apply_clahe(self, image):
+
+        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+
+        clahe = cv2.createCLAHE(
+            clipLimit=2.0,
+            tileGridSize=(8, 8)
+        )
+
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+    # ---------------------------------------------------
+    # PREPROCESS
+    # ---------------------------------------------------
+    def preprocess(self, image):
+
+        if isinstance(image, str):
+            image = cv2.imread(image)
+
         if image is None:
-            raise ValueError("Image is None")
+            raise ValueError("❌ Invalid image")
 
-        # Resize if needed
-        if image.shape[:2] != (Config.IMAGE_SIZE, Config.IMAGE_SIZE):
-            image = tf.image.resize(image, (Config.IMAGE_SIZE, Config.IMAGE_SIZE)).numpy()
+        # BGR → RGB
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        image = image.astype(np.float32)
+        # Resize (EfficientNetB3)
+        image = cv2.resize(image, (260, 260))
 
-        # ✅ IMPORTANT: EfficientNet preprocessing
-        image = tf.keras.applications.efficientnet.preprocess_input(image)
+        # CLAHE
+        image = self.apply_clahe(image)
 
-        if image.ndim == 3:
-            image = np.expand_dims(image, axis=0)
+        # Normalize
+        image = tf.keras.applications.efficientnet.preprocess_input(
+            image.astype("float32")
+        )
 
         return image
 
     # ---------------------------------------------------
-    # SINGLE IMAGE PREDICTION
+    # 🔥 TTA AUGMENTATION (CLEAN + SAFE)
     # ---------------------------------------------------
-    def predict(self, image: np.ndarray) -> Tuple[str, float, np.ndarray]:
-        try:
-            if self.model is None:
-                raise RuntimeError("Model not loaded")
+    def tta_augment(self, image):
 
-            image = self.preprocess(image)
+        variants = [image]
 
-            predictions = self.model.predict(image, verbose=0)
+        # Horizontal flip
+        variants.append(cv2.flip(image, 1))
 
-            probabilities = predictions[0]
+        h, w = image.shape[:2]
 
-            predicted_class_idx = int(np.argmax(probabilities))
-            confidence = float(probabilities[predicted_class_idx])
+        # Small rotations
+        for angle in [8, -8]:
+            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1)
+            rotated = cv2.warpAffine(image, M, (w, h))
+            variants.append(rotated)
 
-            predicted_class = self.class_names.get(
-                predicted_class_idx,
-                f"Class {predicted_class_idx}"
-            )
+        # Brightness adjustments
+        variants.append(cv2.convertScaleAbs(image, alpha=1.1, beta=10))
+        variants.append(cv2.convertScaleAbs(image, alpha=0.9, beta=-10))
 
-            logger.info(
-                f"Prediction: {predicted_class} "
-                f"(confidence: {confidence:.4f})"
-            )
-
-            return predicted_class, confidence, probabilities
-
-        except Exception as e:
-            logger.error(f"❌ Prediction failed: {str(e)}")
-            traceback.print_exc()
-
-            return "Error", 0.0, np.zeros(len(self.class_names))
+        return variants
 
     # ---------------------------------------------------
-    # BATCH PREDICTION
+    # 🔥 CALIBRATION (KEY UPGRADE)
     # ---------------------------------------------------
-    def predict_batch(self, images: np.ndarray) -> np.ndarray:
-        try:
-            if self.model is None:
-                raise RuntimeError("Model not loaded")
+    def calibrate(self, probs):
 
-            images = np.array([self.preprocess(img)[0] for img in images])
+        calibrated = probs.copy()
 
-            predictions = self.model.predict(images, verbose=0)
+        # Boost higher severity classes
+        calibrated[3] *= 1.25   # Severe
+        calibrated[4] *= 1.20   # Proliferative
 
-            logger.info(f"Batch prediction completed: {len(images)} images")
+        # Normalize
+        calibrated = calibrated / np.sum(calibrated)
 
-            return predictions
-
-        except Exception as e:
-            logger.error(f"❌ Batch prediction failed: {str(e)}")
-            traceback.print_exc()
-            return np.array([])
+        return calibrated
 
     # ---------------------------------------------------
-    # CONFIDENCE DISTRIBUTION
+    # 🔥 PREDICT (FINAL VERSION)
     # ---------------------------------------------------
-    def get_prediction_confidence_distribution(
-        self,
-        probabilities: np.ndarray
-    ) -> Dict[str, float]:
+    def predict(self, image) -> Tuple[str, float, np.ndarray]:
 
-        distribution = {}
+        if isinstance(image, str):
+            image = cv2.imread(image)
 
-        try:
-            for idx, prob in enumerate(probabilities):
-                class_name = self.class_names.get(idx, f"Class {idx}")
-                distribution[class_name] = float(prob)
+        if image is None:
+            raise ValueError("❌ Invalid image")
 
-            return distribution
+        # Generate TTA variants
+        variants = self.tta_augment(image)
 
-        except Exception as e:
-            logger.error(f"Distribution error: {str(e)}")
-            return distribution
+        # Preprocess
+        processed = [self.preprocess(v) for v in variants]
+        batch = np.array(processed)
+
+        # Predict
+        preds = self.model.predict(batch, verbose=0)
+
+        # Weighted average
+        weights = np.array([1.0] + [0.9] * (len(preds) - 1))
+        probs = np.average(preds, axis=0, weights=weights)
+
+        # 🔥 Apply calibration
+        probs = self.calibrate(probs)
+
+        class_id = int(np.argmax(probs))
+        confidence = float(np.max(probs))
+
+        label = self.class_names[class_id]
+
+        # Confidence label
+        if confidence > 0.75:
+            conf_text = "High Confidence"
+        elif confidence > 0.50:
+            conf_text = "Moderate Confidence"
+        else:
+            conf_text = "Low Confidence"
+
+        final_label = f"{label} ({conf_text})"
+
+        return final_label, confidence, probs
+
+    # ---------------------------------------------------
+    # SINGLE PREDICT (NO TTA)
+    # ---------------------------------------------------
+    def predict_single(self, image):
+
+        image = self.preprocess(image)
+        image = np.expand_dims(image, axis=0)
+
+        probs = self.model.predict(image, verbose=0)[0]
+
+        # Apply calibration
+        probs = self.calibrate(probs)
+
+        return probs
+
+    # ---------------------------------------------------
+    def get_model(self):
+        return self.model
+
+    def get_classes(self):
+        return self.class_names

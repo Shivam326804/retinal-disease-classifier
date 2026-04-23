@@ -1,0 +1,11 @@
+                  precision    recall  f1-score   support
+
+           No DR     0.9493    0.9850    0.9668      1805
+       Mild NPDR     0.7607    0.5757    0.6554       370
+   Moderate NPDR     0.7672    0.8709    0.8158       999
+     Severe NPDR     0.6531    0.4974    0.5647       193
+Proliferative DR     0.7061    0.5458    0.6157       295
+
+        accuracy                         0.8514      3662
+       macro avg     0.7673    0.6950    0.7237      3662
+    weighted avg     0.8454    0.8514    0.8447      3662

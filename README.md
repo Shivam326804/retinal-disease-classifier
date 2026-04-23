@@ -1,244 +1,186 @@
-# 🧠 AI Retinal Disease Classification System
+﻿# AI Retinal Disease Classifier
 
-A deep learning based system for detecting **Diabetic Retinopathy** from retinal fundus images using convolutional neural networks and transfer learning.
+A full-stack system for automated **Diabetic Retinopathy** screening using retinal fundus images. The project combines a transfer-learned EfficientNetB3 classifier with a production-style FastAPI backend, a Streamlit frontend, Grad-CAM explainability, and PDF medical report generation.
 
-This project uses the **APTOS 2019 Blindness Detection Dataset** and implements a complete ML pipeline including preprocessing, augmentation, training, evaluation, Grad-CAM explainability, and a Streamlit web application for predictions.
+## 🚀 Overview
 
----
+This repository implements a practical clinical screening pipeline for Diabetic Retinopathy severity classification using:
 
-# 📌 Features
+- **EfficientNetB3** with transfer learning
+- **260×260** fundus image input
+- **5 disease severity classes**
+- **CLAHE preprocessing**
+- **Test-Time Augmentation (TTA)**
+- **Probability calibration**
+- **Grad-CAM explainability**
+- **FastAPI backend with SQLite usage tracking**
+- **Streamlit frontend for local and API-driven prediction**
+- **PDF medical report generation**
 
-• Retinal fundus image preprocessing
-• Ben Graham enhancement technique
-• Fundus circle cropping
-• Data augmentation for improved training
-• Multiple CNN architectures
-• Transfer learning with EfficientNet / ResNet
-• Grad-CAM visual explanations
-• Streamlit web interface for real-time predictions
-• Complete training and evaluation pipeline
+## ✨ Key Features
 
----
+- Retinal image preprocessing with **CLAHE** and EfficientNet standard normalization
+- **EfficientNetB3** inference with a custom classifier head
+- **5-target classification**: No DR, Mild NPDR, Moderate NPDR, Severe NPDR, Proliferative DR
+- **TTA ensemble** for robust prediction across flipped, rotated, and brightness-adjusted variants
+- **Probability calibration** to improve severity attribution
+- **Grad-CAM heatmaps** for model interpretability
+- FastAPI SaaS-ready backend with **API key authentication**
+- **SQLite usage tracking** for API requests
+- Streamlit UI with image upload, prediction visualization, Grad-CAM view, and **hospital-style PDF report export**
 
-# 🏥 Problem Statement
-
-Diabetic Retinopathy is a diabetes complication that affects the eyes and can lead to blindness if not detected early.
-
-This system automatically classifies retinal images into disease severity levels using deep learning.
-
----
-
-# 🧬 Disease Classes
-
-| Class | Label            | Description             |
-| ----- | ---------------- | ----------------------- |
-| 0     | No DR            | No Diabetic Retinopathy |
-| 1     | Mild             | Mild NPDR               |
-| 2     | Moderate         | Moderate NPDR           |
-| 3     | Severe           | Severe NPDR             |
-| 4     | Proliferative DR | Advanced DR             |
-
----
-
-# 📊 Dataset
-
-Dataset used:
-
-**APTOS 2019 Blindness Detection**
-
-Source:
-
-https://www.kaggle.com/competitions/aptos2019-blindness-detection
-
-Dataset contains **3662 retinal fundus images** labeled with DR severity.
-
----
-
-# 🏗 Project Architecture
-
-Pipeline:
-
-Dataset
-↓
-Image Preprocessing
-↓
-Fundus Cropping
-↓
-Ben Graham Enhancement
-↓
-Data Augmentation
-↓
-CNN / Transfer Learning Model
-↓
-Training & Validation
-↓
-Grad-CAM Visualization
-↓
-Prediction API
-↓
-Streamlit Web Application
-
----
-
-# 🧠 Models Implemented
-
-• Baseline CNN
-• Custom Deep CNN
-• ResNet50 (Transfer Learning)
-• EfficientNet
-• InceptionV3
-
-EfficientNet provided the best performance.
-
----
-
-# 📂 Project Structure
+## 🧩 System Architecture
 
 ```
-retinal_disease_classifier
-│
-├── src
-│   ├── preprocessing
-│   ├── training
-│   ├── inference
-│   └── utils
-│
-├── streamlit_app
-│
-├── data
-│   ├── raw
-│   └── processed
-│
-├── models
-│
-├── logs
-│
-├── predict.py
-├── requirements.txt
-└── README.md
+User Image Upload
+        │
+        ▼
+ Streamlit App ───────────────┐
+        │                      │
+        ▼                      │
+   Predictor / Local Model     │
+        │                      │
+        ▼                      │
+   CLAHE → Resize → Normalize  │
+        │                      │
+        ▼                      │
+   TTA → Model Ensemble        │
+        │                      │
+        ▼                      │
+   Calibrated Probabilities   │
+        │                      │
+        ▼                      │
+   Prediction + Grad-CAM       │
+        │                      │
+        ▼                      │
+   PDF Medical Report Export   │
+
+Optional SaaS Mode → FastAPI Backend → SQLite Usage DB
 ```
 
----
+## 📦 Installation
 
-# ⚙️ Installation
+### Local Setup
 
-Clone the repository
-
-```
+```bash
 git clone https://github.com/Shivam326804/retinal-disease-classifier.git
-```
-
-Go to project folder
-
-```
 cd retinal-disease-classifier
-```
-
-Create virtual environment
-
-```
 python -m venv venv
-```
-
-Activate environment
-
-Windows
-
-```
 venv\Scripts\activate
-```
-
-Install dependencies
-
-```
 pip install -r requirements.txt
 ```
 
----
+### Model and Data
 
-# 🚀 Running the Project
+- Ensure `models/final_model.keras` exists before inference.
+- Raw dataset should be placed under `data/raw/APTOS_2019/`.
+- Processed arrays are stored in `data/processed/` after preprocessing.
 
-### 1️⃣ Preprocess Dataset
+## ▶️ Running the Backend
 
-```
-python -m src.preprocessing.data_preprocessor
-```
+### Start FastAPI
 
----
-
-### 2️⃣ Train the Model
-
-```
-python -m src.training.train
+```bash
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
----
+### Or run directly
 
-### 3️⃣ Run Prediction Script
-
-```
-python predict.py --image path_to_image
+```bash
+python -m src.api.main
 ```
 
----
+## ▶️ Running the Streamlit Frontend
 
-### 4️⃣ Launch Streamlit Web App
-
-```
+```bash
 streamlit run streamlit_app/app.py
 ```
 
----
+## 🧪 Usage
 
-# 🔍 Explainability with Grad-CAM
+### Local prediction
 
-Grad-CAM is used to visualize which parts of the retinal image influenced the model's decision.
+Upload an image in the Streamlit interface and view the predicted DR severity, confidence score, probability distribution, and Grad-CAM overlay.
 
-This improves interpretability of the AI model for medical use.
+### API SaaS mode
 
----
+1. Enable **Use API (SaaS Mode)** in the Streamlit sidebar
+2. Provide a valid `x-api-key`
+3. Upload an image and run prediction through the FastAPI backend
 
-# 📈 Evaluation Metrics
+### Generate PDF report
 
-• Accuracy
-• Precision
-• Recall
-• F1 Score
-• Confusion Matrix
+From the Streamlit app, click **Generate Hospital Report** to download a clinical-style PDF containing:
 
----
+- Prediction summary
+- Confidence score
+- Class probabilities
+- Input fundus image
+- Optional Grad-CAM attention map
 
-# 🖥 Example Output
+## 🧠 API Endpoints
 
-Prediction:
+### `POST /login`
+- Request: `username`, `password`
+- Response: `api_key`
 
-```
-Mild Diabetic Retinopathy
-Confidence: 92%
-```
+### `GET /health-check`
+- Response: service status and model load state
 
-Grad-CAM highlights affected retinal regions.
+### `GET /usage`
+- Header: `x-api-key`
+- Response: total requests, successful requests, failed requests
 
----
+### `POST /predict`
+- Header: `x-api-key`
+- Multipart: `file` image upload
+- Response: predicted disease, confidence, probabilities, Grad-CAM availability
 
-# 🔬 Future Improvements
+### `POST /predict-with-gradcam`
+- Header: `x-api-key`
+- Multipart: `file` image upload
+- Response: predicted disease, confidence, probabilities, optional Grad-CAM image
 
-• Larger retinal datasets
-• Vision Transformer models
-• Test-time augmentation
-• Model ensembling
-• Cloud deployment
+## 🔍 Grad-CAM Explainability
 
----
+The project uses Grad-CAM to generate a heatmap over the retinal image, highlighting regions that contributed most to the model's classification decision. Grad-CAM is available in local Streamlit mode and the `/predict-with-gradcam` API endpoint when the model architecture supports it.
 
-# 👨‍💻 Author
+## 🩺 Medical Report Feature
 
-Shivam
+A hospital-style PDF report is generated using `reportlab`.
+The report includes:
 
-B.Tech Information Technology
+- DR diagnosis summary
+- Confidence score
+- Class probability table
+- Input image
+- Optional Grad-CAM attention map
 
----
+## 📊 Model Performance
 
-# 📜 License
+![Confusion Matrix](reports/confusion_matrix_final.png)
 
-This project is for educational and research purposes.
+- **Accuracy**: ~85%
+- **Class imbalance** is present across the 5 DR severity labels
+- **Test-Time Augmentation + probability calibration** improve the prediction stability for severe classes
+
+## 📁 Project Structure
+
+- `src/api/main.py` — FastAPI application with authentication and request logging
+- `src/inference/predictor.py` — EfficientNetB3 inference, CLAHE, TTA, and calibration
+- `src/inference/grad_cam.py` — Grad-CAM heatmap generation
+- `src/reports/medical_report.py` — PDF report generation
+- `src/utils/config.py` — central application configuration
+- `streamlit_app/app.py` — Streamlit frontend
+- `models/final_model.keras` — trained model checkpoint
+- `data/raw/APTOS_2019/` — raw dataset files
+- `data/processed/` — processed images and labels
+
+## 📌 Notes
+
+- The system is intended for **screening and research** only.
+- It is not a substitute for clinical diagnosis.
+
+## 🤝 Contributing
+
+Contributions are welcome. Please open a pull request with bug fixes, enhancements, or documentation improvements.

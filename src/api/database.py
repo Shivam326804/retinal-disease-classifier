@@ -1,12 +1,15 @@
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from ..utils.config import Config
 
 DB_PATH = Config.LOGS_DIR / "saas.db"
 
 
+# ---------------------------------------------------
+# CONNECTION
+# ---------------------------------------------------
 def get_connection():
     return sqlite3.connect(DB_PATH)
 
@@ -19,6 +22,7 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
+    # ---------------- API KEYS ----------------
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS api_keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,12 +32,36 @@ def init_db():
     )
     """)
 
+    # ---------------- USAGE ----------------
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS usage (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         api_key TEXT,
         timestamp TEXT,
         success INTEGER
+    )
+    """)
+
+    # ---------------- PATIENTS ----------------
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS patients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        patient_id TEXT UNIQUE,
+        name TEXT,
+        age INTEGER,
+        gender TEXT,
+        created_at TEXT
+    )
+    """)
+
+    # ---------------- PREDICTIONS ----------------
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS predictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        patient_id TEXT,
+        prediction TEXT,
+        confidence REAL,
+        timestamp TEXT
     )
     """)
 
@@ -113,3 +141,87 @@ def get_usage(api_key: str):
         "successful_requests": success,
         "failed_requests": total - success
     }
+
+
+# ---------------------------------------------------
+# PATIENT MANAGEMENT (NEW)
+# ---------------------------------------------------
+def add_patient(patient_id: str, name: str, age: int, gender: str):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT OR IGNORE INTO patients (patient_id, name, age, gender, created_at)
+    VALUES (?, ?, ?, ?, ?)
+    """, (patient_id, name, age, gender, datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+
+
+def get_patient(patient_id: str):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT patient_id, name, age, gender
+    FROM patients
+    WHERE patient_id = ?
+    """, (patient_id,))
+
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {
+            "patient_id": result[0],
+            "name": result[1],
+            "age": result[2],
+            "gender": result[3]
+        }
+
+    return None
+
+
+# ---------------------------------------------------
+# PREDICTION LOGGING (NEW)
+# ---------------------------------------------------
+def log_prediction(patient_id: str, prediction: str, confidence: float):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT INTO predictions (patient_id, prediction, confidence, timestamp)
+    VALUES (?, ?, ?, ?)
+    """, (patient_id, prediction, confidence, datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+
+
+def get_patient_history(patient_id: str):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT prediction, confidence, timestamp
+    FROM predictions
+    WHERE patient_id = ?
+    ORDER BY timestamp DESC
+    """, (patient_id,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "prediction": r[0],
+            "confidence": r[1],
+            "timestamp": r[2]
+        }
+        for r in rows
+    ]

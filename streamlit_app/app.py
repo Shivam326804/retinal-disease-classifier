@@ -20,10 +20,18 @@ from PIL import Image
 from datetime import datetime
 import requests
 import cv2
+import uuid
 
 from src.utils.config import Config
 from src.inference.predictor import Predictor
 from src.inference.grad_cam import GradCAMVisualizer
+
+# 🔥 DB IMPORTS (NEW)
+from src.api.database import (
+    add_patient,
+    log_prediction,
+    get_patient_history
+)
 
 # SAFE IMPORT
 try:
@@ -43,7 +51,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------
-# LOAD LOCAL MODEL
+# LOAD MODEL
 # ---------------------------------------------------
 @st.cache_resource
 def load_system():
@@ -68,13 +76,8 @@ def api_predict(image, api_key):
 
     _, img_encoded = cv2.imencode(".jpg", image)
 
-    files = {
-        "file": ("image.jpg", img_encoded.tobytes(), "image/jpeg")
-    }
-
-    headers = {
-        "x-api-key": api_key
-    }
+    files = {"file": ("image.jpg", img_encoded.tobytes(), "image/jpeg")}
+    headers = {"x-api-key": api_key}
 
     response = requests.post(url, files=files, headers=headers)
 
@@ -82,15 +85,6 @@ def api_predict(image, api_key):
         raise Exception(response.text)
 
     return response.json()
-
-# ---------------------------------------------------
-# STATE
-# ---------------------------------------------------
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "last_file" not in st.session_state:
-    st.session_state.last_file = None
 
 # ---------------------------------------------------
 # SIDEBAR
@@ -107,20 +101,29 @@ api_mode = st.sidebar.checkbox("Use API (SaaS Mode)")
 api_key = st.sidebar.text_input("API Key", type="password")
 
 # ---------------------------------------------------
+# 🧾 PATIENT INFO
+# ---------------------------------------------------
+st.sidebar.subheader("🧾 Patient Information")
+
+patient_name = st.sidebar.text_input("Patient Name")
+patient_id = st.sidebar.text_input("Patient ID")
+
+if not patient_id:
+    patient_id = f"PAT-{uuid.uuid4().hex[:6].upper()}"
+
+age = st.sidebar.number_input("Age", 0, 120, 30)
+gender = st.sidebar.selectbox("Gender", ["Male", "Female", "Other"])
+
+# ---------------------------------------------------
 # HOME
 # ---------------------------------------------------
 if page == "🏠 Home":
-
     st.title("🧠 Diabetic Retinopathy Screening AI")
-
     st.markdown("""
-### Detect severity of diabetic retinopathy
-
 ✔ Local + SaaS prediction  
-✔ Confidence score  
 ✔ Grad-CAM visualization  
-✔ Medical report export  
-✔ History tracking  
+✔ Clinical PDF reports  
+✔ Patient tracking system  
 """)
 
 # ---------------------------------------------------
@@ -140,16 +143,15 @@ elif page == "🔍 Prediction":
         col1, col2 = st.columns([2,1])
 
         with col1:
-            st.image(image_np, caption="Uploaded Image", width="stretch")
+            st.image(image_np, caption="Uploaded Image", use_container_width=True)
 
         # -------------------------
         # PREDICTION
         # -------------------------
-        with st.spinner("🧠 Analyzing..."):
+        with st.spinner("Analyzing..."):
             try:
                 if api_mode and api_key:
                     res = api_predict(image_np, api_key)
-
                     label = res["predicted_disease"]
                     conf = res["confidence"]
                     probs = list(res["probabilities"].values())
@@ -160,6 +162,13 @@ elif page == "🔍 Prediction":
                 st.error(f"Prediction failed: {str(e)}")
                 st.stop()
 
+        # 🔥 SAVE TO DB
+        add_patient(patient_id, patient_name, age, gender)
+        log_prediction(patient_id, label, float(conf))
+
+        # -------------------------
+        # UI OUTPUT
+        # -------------------------
         class_id = int(np.argmax(probs))
 
         risk_map = {
@@ -169,136 +178,114 @@ elif page == "🔍 Prediction":
             3: "High Risk 🔴",
             4: "High Risk 🔴"
         }
-        risk = risk_map[class_id]
 
         with col2:
-            st.markdown(
-                f"<div style='padding:15px;background:#111;border-radius:10px;color:white'>{label}</div>",
-                unsafe_allow_html=True
-            )
-
+            st.markdown(f"### {label}")
             st.metric("Confidence", f"{conf*100:.2f}%")
             st.progress(float(conf))
-            st.write(f"### {risk}")
+            st.write(risk_map[class_id])
+
+        # ---------------------------------------------------
+        # PATIENT PREVIEW
+        # ---------------------------------------------------
+        st.subheader("🧾 Patient Preview")
+        st.write({
+            "Name": patient_name,
+            "ID": patient_id,
+            "Age": age,
+            "Gender": gender
+        })
 
         # ---------------------------------------------------
         # PROBABILITY
         # ---------------------------------------------------
-        st.subheader("📊 Probability Distribution")
-
         df = pd.DataFrame({
             "Class": predictor.get_classes(),
             "Probability": probs
         })
-
         st.bar_chart(df.set_index("Class"))
 
         # ---------------------------------------------------
-        # GRAD-CAM (LOCAL ONLY)
+        # GRAD-CAM
         # ---------------------------------------------------
         st.subheader("🔥 AI Attention Map")
 
         heatmap = None
 
-        if not api_mode and gradcam is not None:
-            try:
-                processed = predictor.preprocess(image_np)
-                processed = np.expand_dims(processed, axis=0)
+        if gradcam is not None:
+            processed = predictor.preprocess(image_np)
+            processed = np.expand_dims(processed, axis=0)
 
-                heatmap = gradcam.generate_cam(processed)
-                overlay = gradcam.overlay_heatmap(image_np, heatmap)
+            heatmap = gradcam.generate_cam(processed)
+            overlay = gradcam.overlay_heatmap(image_np, heatmap)
 
-                c1, c2 = st.columns(2)
-
-                with c1:
-                    st.image(image_np, caption="Original", width="stretch")
-
-                with c2:
-                    st.image(overlay, caption="Grad-CAM", width="stretch")
-
-            except Exception as e:
-                st.error(f"Grad-CAM error: {str(e)}")
-        else:
-            st.info("Grad-CAM available only in local mode")
-
-        st.info("⚠️ AI screening tool. Not a medical diagnosis.")
+            st.image(overlay, caption="Grad-CAM", use_container_width=True)
 
         # ---------------------------------------------------
         # REPORT
         # ---------------------------------------------------
         st.subheader("📄 Medical Report")
 
-        if not REPORT_AVAILABLE:
-            st.warning("Install 'reportlab' to enable report download")
-        else:
-            if st.button("Generate Hospital Report"):
-                with st.spinner("Generating report..."):
-                    try:
-                        pdf_path = generate_medical_report(
-                            image=image_np,
-                            prediction=label,
-                            confidence=conf,
-                            probabilities=probs,
-                            class_names=predictor.get_classes(),
-                            heatmap=heatmap
-                        )
+        if REPORT_AVAILABLE:
+            if st.button("Generate Report"):
 
-                        with open(pdf_path, "rb") as f:
-                            st.download_button(
-                                label="⬇ Download Report",
-                                data=f,
-                                file_name="DR_Report.pdf",
-                                mime="application/pdf"
-                            )
+                if not patient_name:
+                    st.warning("Enter patient name")
+                    st.stop()
 
-                    except Exception as e:
-                        st.error(f"Report generation failed: {str(e)}")
+                pdf_path = generate_medical_report(
+                    image=image_np,
+                    prediction=label,
+                    confidence=conf,
+                    probabilities=probs,
+                    class_names=predictor.get_classes(),
+                    heatmap=heatmap,
+                    patient_data={
+                        "name": patient_name,
+                        "id": patient_id,
+                        "age": age,
+                        "gender": gender
+                    }
+                )
 
-        # ---------------------------------------------------
-        # HISTORY
-        # ---------------------------------------------------
-        if st.session_state.last_file != file.name:
-            st.session_state.history.append({
-                "Time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-                "Image": file.name,
-                "Prediction": label,
-                "Confidence": f"{conf*100:.2f}%"
-            })
-            st.session_state.last_file = file.name
+                with open(pdf_path, "rb") as f:
+                    st.download_button(
+                        "Download Report",
+                        f,
+                        file_name=f"{patient_id}_report.pdf"
+                    )
 
 # ---------------------------------------------------
-# HISTORY
+# HISTORY (🔥 FULLY CONNECTED)
 # ---------------------------------------------------
 elif page == "📜 History":
 
-    st.title("📜 Prediction History")
+    st.title("📜 Patient History")
 
-    if len(st.session_state.history) == 0:
-        st.info("No predictions yet.")
-    else:
-        df = pd.DataFrame(st.session_state.history)
-        st.dataframe(df, width="stretch")
+    search_id = st.text_input("Enter Patient ID")
 
-        st.download_button(
-            "⬇ Download CSV",
-            data=df.to_csv(index=False),
-            file_name="history.csv",
-            mime="text/csv"
-        )
+    if search_id:
+        history = get_patient_history(search_id)
+
+        if not history:
+            st.warning("No records found")
+        else:
+            df = pd.DataFrame(history)
+            st.dataframe(df, use_container_width=True)
+
+            st.download_button(
+                "Download History",
+                df.to_csv(index=False),
+                file_name=f"{search_id}_history.csv"
+            )
 
 # ---------------------------------------------------
 # ABOUT
 # ---------------------------------------------------
 else:
-
-    st.title("ℹ️ About Project")
-
+    st.title("ℹ️ About")
     st.markdown("""
-### Diabetic Retinopathy Classification
-
-- Dataset: APTOS 2019  
-- Model: EfficientNetB3  
-- Framework: TensorFlow + Streamlit + FastAPI  
-
-Hybrid Local + SaaS AI system.
+AI-powered diabetic retinopathy detection system  
+Built with TensorFlow, Streamlit, and FastAPI  
+Includes explainability and clinical reporting  
 """)

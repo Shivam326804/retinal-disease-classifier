@@ -17,23 +17,23 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from PIL import Image
-from datetime import datetime
 import requests
 import cv2
 import uuid
+import time
 
 from src.utils.config import Config
 from src.inference.predictor import Predictor
 from src.inference.grad_cam import GradCAMVisualizer
 
-# 🔥 DB IMPORTS (NEW)
 from src.api.database import (
     add_patient,
+    get_patient,
     log_prediction,
     get_patient_history
 )
 
-# SAFE IMPORT
+# REPORT
 try:
     from src.reports.medical_report import generate_medical_report
     REPORT_AVAILABLE = True
@@ -42,13 +42,15 @@ except:
     REPORT_AVAILABLE = False
 
 # ---------------------------------------------------
-# PAGE CONFIG
+# CONFIG
 # ---------------------------------------------------
 st.set_page_config(
     page_title="DR Screening AI",
     page_icon="🧠",
     layout="wide"
 )
+
+API_URL = os.getenv("API_URL", "http://localhost:8000/predict")
 
 # ---------------------------------------------------
 # LOAD MODEL
@@ -72,14 +74,12 @@ predictor, gradcam = load_system()
 # API CALL
 # ---------------------------------------------------
 def api_predict(image, api_key):
-    url = "http://localhost:8000/predict"
-
     _, img_encoded = cv2.imencode(".jpg", image)
 
     files = {"file": ("image.jpg", img_encoded.tobytes(), "image/jpeg")}
     headers = {"x-api-key": api_key}
 
-    response = requests.post(url, files=files, headers=headers)
+    response = requests.post(API_URL, files=files, headers=headers)
 
     if response.status_code != 200:
         raise Exception(response.text)
@@ -101,15 +101,19 @@ api_mode = st.sidebar.checkbox("Use API (SaaS Mode)")
 api_key = st.sidebar.text_input("API Key", type="password")
 
 # ---------------------------------------------------
-# 🧾 PATIENT INFO
+# 🧾 PATIENT INFO (SESSION SAFE)
 # ---------------------------------------------------
 st.sidebar.subheader("🧾 Patient Information")
 
-patient_name = st.sidebar.text_input("Patient Name")
-patient_id = st.sidebar.text_input("Patient ID")
+if "patient_id" not in st.session_state:
+    st.session_state.patient_id = f"PAT-{uuid.uuid4().hex[:6].upper()}"
 
-if not patient_id:
-    patient_id = f"PAT-{uuid.uuid4().hex[:6].upper()}"
+patient_name = st.sidebar.text_input("Patient Name")
+
+patient_id = st.sidebar.text_input(
+    "Patient ID",
+    value=st.session_state.patient_id
+)
 
 age = st.sidebar.number_input("Age", 0, 120, 30)
 gender = st.sidebar.selectbox("Gender", ["Male", "Female", "Other"])
@@ -146,9 +150,12 @@ elif page == "🔍 Prediction":
             st.image(image_np, caption="Uploaded Image", use_container_width=True)
 
         # -------------------------
-        # PREDICTION
+        # PREDICTION (SAFE + FALLBACK)
         # -------------------------
         with st.spinner("Analyzing..."):
+
+            start_time = time.time()
+
             try:
                 if api_mode and api_key:
                     res = api_predict(image_np, api_key)
@@ -156,14 +163,19 @@ elif page == "🔍 Prediction":
                     conf = res["confidence"]
                     probs = list(res["probabilities"].values())
                 else:
-                    label, conf, probs = predictor.predict(image_np)
+                    raise Exception("Using local")
 
-            except Exception as e:
-                st.error(f"Prediction failed: {str(e)}")
-                st.stop()
+            except:
+                label, conf, probs = predictor.predict(image_np)
 
-        # 🔥 SAVE TO DB
-        add_patient(patient_id, patient_name, age, gender)
+            end_time = time.time()
+
+        # -------------------------
+        # DB SAVE (SAFE)
+        # -------------------------
+        if not get_patient(patient_id):
+            add_patient(patient_id, patient_name, age, gender)
+
         log_prediction(patient_id, label, float(conf))
 
         # -------------------------
@@ -184,10 +196,11 @@ elif page == "🔍 Prediction":
             st.metric("Confidence", f"{conf*100:.2f}%")
             st.progress(float(conf))
             st.write(risk_map[class_id])
+            st.caption(f"Inference time: {end_time-start_time:.2f}s")
 
-        # ---------------------------------------------------
+        # -------------------------
         # PATIENT PREVIEW
-        # ---------------------------------------------------
+        # -------------------------
         st.subheader("🧾 Patient Preview")
         st.write({
             "Name": patient_name,
@@ -196,34 +209,38 @@ elif page == "🔍 Prediction":
             "Gender": gender
         })
 
-        # ---------------------------------------------------
+        # -------------------------
         # PROBABILITY
-        # ---------------------------------------------------
+        # -------------------------
         df = pd.DataFrame({
             "Class": predictor.get_classes(),
             "Probability": probs
         })
         st.bar_chart(df.set_index("Class"))
 
-        # ---------------------------------------------------
-        # GRAD-CAM
-        # ---------------------------------------------------
+        # -------------------------
+        # GRAD-CAM (SAFE)
+        # -------------------------
         st.subheader("🔥 AI Attention Map")
 
         heatmap = None
 
         if gradcam is not None:
-            processed = predictor.preprocess(image_np)
-            processed = np.expand_dims(processed, axis=0)
+            try:
+                processed = predictor.preprocess(image_np)
+                processed = np.expand_dims(processed, axis=0)
 
-            heatmap = gradcam.generate_cam(processed)
-            overlay = gradcam.overlay_heatmap(image_np, heatmap)
+                heatmap = gradcam.generate_cam(processed)
+                overlay = gradcam.overlay_heatmap(image_np, heatmap)
 
-            st.image(overlay, caption="Grad-CAM", use_container_width=True)
+                st.image(overlay, caption="Grad-CAM", use_container_width=True)
 
-        # ---------------------------------------------------
+            except:
+                st.warning("Grad-CAM unavailable")
+
+        # -------------------------
         # REPORT
-        # ---------------------------------------------------
+        # -------------------------
         st.subheader("📄 Medical Report")
 
         if REPORT_AVAILABLE:
@@ -256,7 +273,7 @@ elif page == "🔍 Prediction":
                     )
 
 # ---------------------------------------------------
-# HISTORY (🔥 FULLY CONNECTED)
+# HISTORY
 # ---------------------------------------------------
 elif page == "📜 History":
 

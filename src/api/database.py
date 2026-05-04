@@ -8,10 +8,10 @@ DB_PATH = Config.LOGS_DIR / "saas.db"
 
 
 # ---------------------------------------------------
-# CONNECTION
+# CONNECTION (THREAD-SAFE)
 # ---------------------------------------------------
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
 # ---------------------------------------------------
@@ -21,6 +21,9 @@ def init_db():
 
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Enable foreign keys
+    cursor.execute("PRAGMA foreign_keys = ON;")
 
     # ---------------- API KEYS ----------------
     cursor.execute("""
@@ -61,8 +64,15 @@ def init_db():
         patient_id TEXT,
         prediction TEXT,
         confidence REAL,
-        timestamp TEXT
+        timestamp TEXT,
+        FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
     )
+    """)
+
+    # ---------------- INDEXES (PERFORMANCE) ----------------
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_patient_id
+    ON predictions (patient_id)
     """)
 
     conn.commit()
@@ -144,7 +154,7 @@ def get_usage(api_key: str):
 
 
 # ---------------------------------------------------
-# PATIENT MANAGEMENT (NEW)
+# PATIENT MANAGEMENT
 # ---------------------------------------------------
 def add_patient(patient_id: str, name: str, age: int, gender: str):
 
@@ -186,7 +196,7 @@ def get_patient(patient_id: str):
 
 
 # ---------------------------------------------------
-# PREDICTION LOGGING (NEW)
+# PREDICTION LOGGING
 # ---------------------------------------------------
 def log_prediction(patient_id: str, prediction: str, confidence: float):
 

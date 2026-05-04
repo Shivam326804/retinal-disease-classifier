@@ -17,7 +17,6 @@ from ..utils.config import Config
 from ..inference.predictor import Predictor
 from ..inference.grad_cam import GradCAMVisualizer
 
-# 🔥 NEW (DB)
 from .database import (
     init_db,
     add_api_key,
@@ -29,9 +28,10 @@ from .database import (
 logger = setup_logger(__name__)
 
 # ---------------------------------------------------
-# 🔐 API KEY (ENV SAFE)
+# 🔐 ENV CONFIG
 # ---------------------------------------------------
-DEFAULT_API_KEY = os.getenv("DR_API_KEY", "dr_ai_secure_key_123")
+DEFAULT_API_KEY = os.getenv("DR_API_KEY", "dr_default_key")
+APP_VERSION = "3.1.0"
 
 # ---------------------------------------------------
 # 🔐 AUTH
@@ -71,12 +71,12 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Retinal Disease Classification API",
-        version="3.0.0"
+        version=APP_VERSION
     )
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["*"],  # tighten later if needed
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -92,11 +92,16 @@ def create_app() -> FastAPI:
     async def startup_event():
 
         try:
-            # 🔥 INIT DATABASE
+            logger.info("🚀 Starting backend...")
+
+            # DB INIT
             init_db()
             add_api_key(DEFAULT_API_KEY, "admin")
 
             model_path = Config.get_model_path()
+
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model not found: {model_path}")
 
             predictor = Predictor(model_path=str(model_path))
 
@@ -109,39 +114,26 @@ def create_app() -> FastAPI:
             app.state.predictor = predictor
             app.state.gradcam = gradcam
 
-            logger.info("✅ Backend ready (DB + Model loaded)")
+            logger.info("✅ Backend ready (Model + DB loaded)")
 
         except Exception as e:
-            logger.error(f"Startup error: {str(e)}")
-
-    # ---------------------------------------------------
-    # LOGIN (BASIC)
-    # ---------------------------------------------------
-    @app.post("/login")
-    async def login(username: str, password: str):
-
-        if username == "admin" and password == "password123":
-            return {
-                "api_key": DEFAULT_API_KEY,
-                "message": "Login successful"
-            }
-
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+            logger.error(f"❌ Startup failed: {str(e)}")
+            raise e  # 🔥 fail fast (important for Render)
 
     # ---------------------------------------------------
     # HEALTH
     # ---------------------------------------------------
-    @app.get("/health-check", response_model=HealthCheckResponse)
+    @app.get("/health", response_model=HealthCheckResponse)
     async def health_check():
 
         return HealthCheckResponse(
             status="healthy" if app.state.predictor else "model_not_loaded",
             timestamp=datetime.now().isoformat(),
-            version="3.0.0"
+            version=APP_VERSION
         )
 
     # ---------------------------------------------------
-    # USAGE (DB)
+    # USAGE
     # ---------------------------------------------------
     @app.get("/usage")
     async def usage(api_key: str = Depends(verify_api_key)):
@@ -273,14 +265,8 @@ app = create_app()
 
 
 # ---------------------------------------------------
-# RUN SERVER
+# RUN (LOCAL ONLY)
 # ---------------------------------------------------
 if __name__ == "__main__":
-
     import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,10 +1,11 @@
 """
-FINAL data_preprocessor.py (STABLE + FAST + DEBUG SAFE)
+FINAL data_preprocessor.py (PRODUCTION READY)
 
-✔ Correct config usage
-✔ Robust dataset handling
+✔ Consistent with model input size (260x260)
+✔ Correct CLAHE order (before resize)
 ✔ Safe retina crop
-✔ CLAHE preserved
+✔ No normalization (handled by model)
+✔ Robust dataset handling
 ✔ Debug-friendly logs
 ✔ No silent failures
 """
@@ -20,7 +21,7 @@ from src.utils.config import Config
 
 class DataPreprocessor:
 
-    def __init__(self, image_size=224):
+    def __init__(self, image_size=Config.IMAGE_SIZE):
         self.image_size = image_size
         print(f"INFO: Preprocessor initialized ({image_size}x{image_size})")
 
@@ -38,13 +39,14 @@ class DataPreprocessor:
 
         x, y, w, h = cv2.boundingRect(coords)
 
+        # Avoid aggressive cropping
         if w < 50 or h < 50:
             return img
 
         return img[y:y+h, x:x+w]
 
     # ---------------------------------------------------
-    # CLAHE
+    # CLAHE (CONTRAST ENHANCEMENT)
     # ---------------------------------------------------
     def clahe(self, img):
         lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
@@ -68,15 +70,20 @@ class DataPreprocessor:
 
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+        # 1. Crop retina
         img = self.crop_retina(img)
-        img = cv2.resize(img, (self.image_size, self.image_size))
 
-        # Reject very dark images
-        if np.mean(img) < 10:
-            return None
-
+        # 2. CLAHE BEFORE resize (important)
         img = self.clahe(img)
 
+        # 3. Resize to model input
+        img = cv2.resize(img, (self.image_size, self.image_size))
+
+        # 4. Reject extremely dark images
+        if np.mean(img) < 5:
+            return None
+
+        # 5. Return uint8 (model will handle preprocessing)
         return img.astype(np.uint8)
 
     # ---------------------------------------------------
@@ -95,7 +102,6 @@ class DataPreprocessor:
 
         df = pd.read_csv(labels_csv)
 
-        # 🔥 safety check
         if "id_code" not in df.columns or "diagnosis" not in df.columns:
             raise ValueError("❌ CSV must contain 'id_code' and 'diagnosis' columns")
 

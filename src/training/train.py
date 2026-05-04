@@ -1,3 +1,13 @@
+"""
+FINAL TRAIN.PY (OPTIMIZED + DEPLOYMENT READY)
+
+✔ Stable pipeline
+✔ Better fine-tuning strategy
+✔ Model checkpoint added
+✔ Improved augmentation
+✔ Deployment-safe saving
+"""
+
 # ---------------------------------------------------
 # SYSTEM
 # ---------------------------------------------------
@@ -9,10 +19,9 @@ import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 
-from tensorflow.keras.applications.efficientnet import preprocess_input
-
 from src.utils.config import Config
 from src.training.model_builder import ModelBuilder
+
 
 # ---------------------------------------------------
 # CPU SETTINGS
@@ -24,22 +33,19 @@ Config.set_seed(Config.RANDOM_SEED)
 
 
 # ---------------------------------------------------
-# 🔥 FOCAL LOSS (FINAL FIX)
+# 🔥 FOCAL LOSS
 # ---------------------------------------------------
 def focal_loss(gamma=2.0):
 
     class_weights = tf.constant([0.6, 1.8, 0.9, 3.0, 2.5], dtype=tf.float32)
 
     def loss(y_true, y_pred):
-
         y_true = tf.cast(y_true, tf.int32)
 
         ce = tf.keras.losses.sparse_categorical_crossentropy(y_true, y_pred)
-
         pt = tf.exp(-ce)
 
         weights = tf.gather(class_weights, y_true)
-
         focal = weights * ((1 - pt) ** gamma) * ce
 
         return tf.reduce_mean(focal)
@@ -76,20 +82,17 @@ def get_class_weights():
 
 
 # ---------------------------------------------------
-# DATA PIPELINE
+# DATA PIPELINE (IMPROVED)
 # ---------------------------------------------------
-def create_dataset(X, y, training=True, one_hot=False):
+def create_dataset(X, y, training=True):
 
     def preprocess(x, y):
         x = tf.cast(x, tf.float32)
         x = tf.image.resize(x, (260, 260))
-        x = preprocess_input(x)
 
         if training:
             x = tf.image.random_flip_left_right(x)
-
-        if one_hot:
-            y = tf.one_hot(y, depth=Config.NUM_CLASSES)
+            x = tf.image.random_brightness(x, 0.1)
 
         return x, y
 
@@ -100,7 +103,7 @@ def create_dataset(X, y, training=True, one_hot=False):
 
     ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(8)
-    ds = ds.prefetch(tf.data.AUTOTUNE)
+    ds = ds.cache().prefetch(tf.data.AUTOTUNE)
 
     return ds
 
@@ -123,8 +126,8 @@ def train():
         random_state=42
     )
 
-    train_ds = create_dataset(X_train, y_train, True, one_hot=False)
-    val_ds = create_dataset(X_val, y_val, False, one_hot=False)
+    train_ds = create_dataset(X_train, y_train, True)
+    val_ds = create_dataset(X_val, y_val, False)
 
     class_weights = get_class_weights()
 
@@ -135,6 +138,9 @@ def train():
 
     model = builder.build_model()
 
+    # ---------------------------------------------------
+    # CALLBACKS (IMPROVED)
+    # ---------------------------------------------------
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss",
@@ -146,9 +152,18 @@ def train():
             patience=2,
             factor=0.3,
             min_lr=1e-6
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=os.path.join(Config.MODELS_DIR, "best_model.keras"),
+            monitor="val_accuracy",
+            save_best_only=True,
+            mode="max"
         )
     ]
 
+    # -------------------------
+    # STAGE 1
+    # -------------------------
     print("\n📌 Stage 1: Training\n")
 
     model = builder.compile_model(
@@ -167,15 +182,15 @@ def train():
     )
 
     # -------------------------
-    # FINE TUNE
+    # FINE TUNE (FIXED)
     # -------------------------
     print("\n🔥 Fine-tuning...\n")
 
-    model = builder.fine_tune_model(model, 180)
+    model = builder.fine_tune_model(model, 120)   # 🔥 reduced from 180
 
     model = builder.compile_model(
         model,
-        lr=2e-6
+        lr=1e-5   # 🔥 increased from 2e-6
     )
 
     model.fit(
@@ -186,7 +201,11 @@ def train():
         verbose=2
     )
 
+    # ---------------------------------------------------
+    # SAVE FINAL MODEL
+    # ---------------------------------------------------
     save_path = os.path.join(Config.MODELS_DIR, "final_model.keras")
+
     model.save(save_path)
 
     print(f"\n✅ Model saved at: {save_path}")

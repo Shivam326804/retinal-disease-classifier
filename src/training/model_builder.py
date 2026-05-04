@@ -43,15 +43,21 @@ class ModelBuilder:
         base_model.trainable = False
         self.base_model = base_model
 
-        inputs = layers.Input(shape=self.input_shape)
+        # ✅ Explicit dtype (prevents deployment issues)
+        inputs = layers.Input(shape=self.input_shape, dtype=tf.float32)
 
-        x = tf.cast(inputs, tf.float32)
-        x = applications.efficientnet.preprocess_input(x)
+        # ✅ Preprocessing INSIDE model (single source of truth)
+        x = applications.efficientnet.preprocess_input(inputs)
 
         # Keep BN stable
         x = base_model(x, training=False)
 
+        # ✅ Extra regularization (helps generalization)
+        x = layers.Dropout(0.2)(x)
+
+        # ---------------------------------------------------
         # HEAD
+        # ---------------------------------------------------
         x = layers.GlobalAveragePooling2D()(x)
         x = layers.BatchNormalization()(x)
 
@@ -75,7 +81,8 @@ class ModelBuilder:
 
         outputs = layers.Dense(self.num_classes, activation="softmax")(x)
 
-        model = models.Model(inputs, outputs)
+        # ✅ Named model (useful for debugging + logs)
+        model = models.Model(inputs, outputs, name="retinal_classifier")
 
         logger.info("🔥 Model built (EfficientNetB3 FINAL)")
         return model
@@ -87,9 +94,11 @@ class ModelBuilder:
 
         logger.info("🔓 Fine-tuning...")
 
+        # Freeze all layers first
         for layer in self.base_model.layers:
             layer.trainable = False
 
+        # Unfreeze last N layers (except BatchNorm)
         for layer in self.base_model.layers[-unfreeze_layers:]:
             if not isinstance(layer, tf.keras.layers.BatchNormalization):
                 layer.trainable = True
@@ -123,6 +132,8 @@ class ModelBuilder:
         logger.info(f"⚙️ Compiled (lr={lr})")
         return model
 
+    # ---------------------------------------------------
+    # MODEL SUMMARY
     # ---------------------------------------------------
     def get_model_summary(self, model):
         stream = io.StringIO()

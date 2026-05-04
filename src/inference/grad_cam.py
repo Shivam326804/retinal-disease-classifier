@@ -5,25 +5,25 @@ import cv2
 
 class GradCAMVisualizer:
     """
-    Stable Grad-CAM for models with backbone + custom head
+    Stable Grad-CAM for EfficientNet-based models
+    (SAFE + PRODUCTION READY)
     """
 
     def __init__(self, model: tf.keras.Model):
         self.model = model
 
         # ---------------------------------------------------
-        # Extract EfficientNet backbone
+        # Extract backbone
         # ---------------------------------------------------
         self.base_model = self._get_base_model()
 
-        # Last conv layer (EfficientNet standard)
         self.target_layer = self.base_model.get_layer("top_conv")
 
         print(f"✅ Backbone: {self.base_model.name}")
         print(f"✅ Target layer: {self.target_layer.name}")
 
         # ---------------------------------------------------
-        # Backbone model (input → conv + features)
+        # Backbone model
         # ---------------------------------------------------
         self.backbone_model = tf.keras.models.Model(
             inputs=self.base_model.input,
@@ -34,21 +34,26 @@ class GradCAMVisualizer:
         )
 
         # ---------------------------------------------------
-        # Build classifier head (VERY IMPORTANT FIX)
+        # Build classifier head (ROBUST VERSION)
         # ---------------------------------------------------
         x = self.base_model.output
-        head_layers = []
 
-        start = False
+        head_layers = []
+        capture = False
+
         for layer in self.model.layers:
-            if layer.name == self.base_model.name:
-                start = True
+            if layer == self.base_model:
+                capture = True
                 continue
-            if start:
+            if capture:
                 head_layers.append(layer)
+
+        if len(head_layers) == 0:
+            raise ValueError("❌ Could not extract classifier head")
 
         inp = tf.keras.Input(shape=x.shape[1:])
         y = inp
+
         for layer in head_layers:
             y = layer(y)
 
@@ -84,9 +89,11 @@ class GradCAMVisualizer:
         grads = tape.gradient(loss, conv_outputs)
 
         if grads is None:
-            raise ValueError("Gradients are None — check model graph")
+            raise ValueError("❌ Gradients are None — check model graph")
 
-        # Global average pooling
+        # ---------------------------------------------------
+        # Stable Grad-CAM weights
+        # ---------------------------------------------------
         weights = tf.reduce_mean(grads, axis=(1, 2))
 
         conv_outputs = conv_outputs[0]
@@ -96,9 +103,13 @@ class GradCAMVisualizer:
 
         cam = tf.nn.relu(cam)
 
-        # Normalize safely
+        # ---------------------------------------------------
+        # Safe normalization
+        # ---------------------------------------------------
         cam = cam.numpy()
-        cam_min, cam_max = cam.min(), cam.max()
+
+        cam_min = np.min(cam)
+        cam_max = np.max(cam)
 
         if cam_max - cam_min > 1e-8:
             cam = (cam - cam_min) / (cam_max - cam_min)
@@ -115,12 +126,15 @@ class GradCAMVisualizer:
 
         h, w = image.shape[:2]
 
+        # Resize heatmap
         heatmap = cv2.resize(heatmap, (w, h))
+
         heatmap = np.uint8(255 * heatmap)
 
         heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
         heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
 
+        # Ensure image dtype
         if image.max() <= 1.0:
             image = (image * 255).astype(np.uint8)
 

@@ -10,11 +10,6 @@ venv/
 data/raw/
 data/processed/
 
-# Models
-models/
-*.h5
-*.keras
-*.ckpt
 
 # Logs
 logs/

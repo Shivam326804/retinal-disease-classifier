@@ -2,8 +2,9 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, classification_report
+import cv2
 
+from sklearn.metrics import confusion_matrix, classification_report
 from src.utils.config import Config
 
 
@@ -23,28 +24,57 @@ def load_data():
 
 
 # ---------------------------------------------------
-# 🔥 CALIBRATION (IMPROVED)
+# PREPROCESS (MATCH TRAINING)
+# ---------------------------------------------------
+def crop_retina(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
+
+    coords = cv2.findNonZero(thresh)
+
+    if coords is None:
+        return img
+
+    x, y, w, h = cv2.boundingRect(coords)
+
+    if w < 50 or h < 50:
+        return img
+
+    return img[y:y+h, x:x+w]
+
+
+def apply_clahe(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+
+    lab = cv2.merge((l, a, b))
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+
+def preprocess(img):
+    img = crop_retina(img)
+    img = apply_clahe(img)
+    img = cv2.resize(img, (260, 260))
+    return img.astype("float32")
+
+
+# ---------------------------------------------------
+# CALIBRATION
 # ---------------------------------------------------
 def calibrate_predictions(preds):
-    """
-    Slightly boost severe classes without over-distortion
-    """
 
-    calibrated = preds.copy()
-
-    # softer scaling (more stable)
     weights = np.array([1.0, 1.0, 1.05, 1.20, 1.15])
+    preds = preds * weights
+    preds = preds / (np.sum(preds, axis=1, keepdims=True) + 1e-8)
 
-    calibrated = calibrated * weights
-
-    # safe normalization
-    calibrated = calibrated / (np.sum(calibrated, axis=1, keepdims=True) + 1e-8)
-
-    return calibrated
+    return preds
 
 
 # ---------------------------------------------------
-# 🔥 TTA PREDICTION (OPTIMIZED)
+# TTA (FIXED)
 # ---------------------------------------------------
 def tta_predict(model, X, batch_size=16):
 
@@ -55,42 +85,31 @@ def tta_predict(model, X, batch_size=16):
     for i in range(0, len(X), batch_size):
 
         batch = X[i:i + batch_size]
-
-        tta_images = []
+        tta_batch = []
 
         for img in batch:
 
-            img = tf.cast(img, tf.float32)
-            img = tf.image.resize(img, (260, 260))
+            img = preprocess(img)
 
-            # augmentations
             variants = [
                 img,
-                tf.image.flip_left_right(img),
-                tf.image.flip_up_down(img)
+                cv2.flip(img, 1),
+                cv2.flip(img, 0)
             ]
 
-            variants = [
-                tf.keras.applications.efficientnet.preprocess_input(v)
-                for v in variants
-            ]
+            tta_batch.extend(variants)
 
-            tta_images.extend(variants)
+        tta_batch = np.array(tta_batch)
 
-        tta_images = tf.stack(tta_images)
+        preds = model.predict(tta_batch, verbose=0)
 
-        preds = model.predict(tta_images, verbose=0)
-
-        # reshape: (batch, 3, num_classes)
         preds = preds.reshape(len(batch), 3, -1)
-
         preds = np.mean(preds, axis=1)
 
         all_preds.append(preds)
 
     preds = np.vstack(all_preds)
 
-    # 🔥 calibration
     preds = calibrate_predictions(preds)
 
     return preds
@@ -101,9 +120,8 @@ def tta_predict(model, X, batch_size=16):
 # ---------------------------------------------------
 def evaluate():
 
-    print("\n📊 Running evaluation with TTA + Calibration...\n")
+    print("\n📊 Running evaluation (FIXED PIPELINE)...\n")
 
-    # ensure dirs exist
     Config.create_directories()
 
     X, y = load_data()
@@ -115,15 +133,12 @@ def evaluate():
     )
     print("✅ Model loaded")
 
-    # ---------------------------------------------------
-    # PREDICTIONS
-    # ---------------------------------------------------
     preds = tta_predict(model, X)
     y_pred = np.argmax(preds, axis=1)
 
-    # ---------------------------------------------------
+    # -------------------------
     # CONFUSION MATRIX
-    # ---------------------------------------------------
+    # -------------------------
     cm = confusion_matrix(y, y_pred)
 
     cm_norm = cm.astype("float") / (
@@ -143,17 +158,17 @@ def evaluate():
 
     plt.xlabel("Predicted")
     plt.ylabel("Actual")
-    plt.title("Normalized Confusion Matrix (TTA + Calibrated)")
+    plt.title("Normalized Confusion Matrix")
 
     save_path = Config.REPORTS_DIR / "confusion_matrix_final.png"
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
-    print(f"📁 Confusion matrix saved at: {save_path}")
+    print(f"📁 Saved: {save_path}")
 
-    # ---------------------------------------------------
-    # CLASSIFICATION REPORT
-    # ---------------------------------------------------
+    # -------------------------
+    # REPORT
+    # -------------------------
     report = classification_report(
         y,
         y_pred,
@@ -161,7 +176,7 @@ def evaluate():
         digits=4
     )
 
-    print("\n📄 Classification Report (Final):\n")
+    print("\n📄 Classification Report:\n")
     print(report)
 
     report_path = Config.REPORTS_DIR / "classification_report_final.txt"
@@ -169,19 +184,11 @@ def evaluate():
     with open(report_path, "w") as f:
         f.write(report)
 
-    print(f"📁 Report saved at: {report_path}")
-
-    # ---------------------------------------------------
-    # CLASS DISTRIBUTION
-    # ---------------------------------------------------
-    print("\n📊 Class distribution:")
-    print(dict(zip(Config.CLASS_NAMES, np.bincount(y))))
+    print(f"📁 Saved: {report_path}")
 
     print("\n✅ Evaluation complete!")
 
 
-# ---------------------------------------------------
-# MAIN
 # ---------------------------------------------------
 if __name__ == "__main__":
     evaluate()

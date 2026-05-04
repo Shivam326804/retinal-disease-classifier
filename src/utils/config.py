@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class Config:
-    """Central configuration for full pipeline (FINAL STABLE VERSION)"""
+    """Central configuration (FINAL PRODUCTION VERSION)"""
 
     # ---------------------------------------------------
     # BASE PATHS
@@ -17,18 +17,36 @@ class Config:
     REPORTS_DIR = (BASE_DIR / "reports").resolve()
 
     # ---------------------------------------------------
-    # MODEL PATH
+    # MODEL PATH (ENV SAFE)
     # ---------------------------------------------------
-    MODEL_PATH = (MODELS_DIR / "final_model.keras").resolve()
+    DEFAULT_MODEL_NAME = "final_model.keras"
 
     @classmethod
     def get_model_path(cls):
-        if cls.MODEL_PATH.exists():
-            return cls.MODEL_PATH
-        raise FileNotFoundError(f"❌ Model not found at: {cls.MODEL_PATH}")
+        """
+        Priority:
+        1. ENV variable (Render safe)
+        2. Default local path
+        """
+
+        env_path = os.getenv("MODEL_PATH")
+
+        if env_path:
+            path = Path(env_path)
+            if path.exists():
+                return path
+            else:
+                raise FileNotFoundError(f"❌ ENV MODEL_PATH not found: {env_path}")
+
+        default_path = (cls.MODELS_DIR / cls.DEFAULT_MODEL_NAME).resolve()
+
+        if default_path.exists():
+            return default_path
+
+        raise FileNotFoundError(f"❌ Model not found at: {default_path}")
 
     # ---------------------------------------------------
-    # 📂 RAW DATA (APTOS)
+    # 📂 RAW DATA (TRAINING ONLY)
     # ---------------------------------------------------
     DATASET_DIR = (BASE_DIR / "data" / "raw" / "APTOS_2019").resolve()
 
@@ -43,7 +61,6 @@ class Config:
     IMAGES_PATH = (DATA_DIR / "images.npy").resolve()
     LABELS_PATH = (DATA_DIR / "labels.npy").resolve()
 
-    # Cache (for tf.data)
     CACHE_DIR = (DATA_DIR / "cache").resolve()
 
     @classmethod
@@ -55,9 +72,9 @@ class Config:
         return cls.IMAGES_PATH, cls.LABELS_PATH
 
     # ---------------------------------------------------
-    # 🔥 TRAINING SETTINGS (FINAL)
+    # 🔥 TRAINING SETTINGS
     # ---------------------------------------------------
-    IMAGE_SIZE = 260   # ✅ MUST match EfficientNetB3
+    IMAGE_SIZE = 260
     BATCH_SIZE = 8
     VALIDATION_SPLIT = 0.2
 
@@ -75,14 +92,14 @@ class Config:
     NUM_CLASSES = len(CLASS_NAMES)
 
     # ---------------------------------------------------
-    # 🔥 CLASS WEIGHTS (GLOBAL REFERENCE)
+    # CLASS WEIGHTS
     # ---------------------------------------------------
     CLASS_WEIGHTS = {
         0: 0.6,
         1: 1.8,
         2: 0.9,
-        3: 3.0,   # Severe boosted
-        4: 2.5    # Proliferative boosted
+        3: 3.0,
+        4: 2.5
     }
 
     # ---------------------------------------------------
@@ -91,10 +108,10 @@ class Config:
     LOG_LEVEL = "INFO"
 
     # ---------------------------------------------------
-    # APP
+    # APP INFO
     # ---------------------------------------------------
     APP_NAME = "Diabetic Retinopathy Screening AI"
-    APP_VERSION = "1.0"
+    APP_VERSION = "1.1"
 
     # ---------------------------------------------------
     # 🔥 REPRODUCIBILITY
@@ -128,7 +145,7 @@ class Config:
             path.mkdir(parents=True, exist_ok=True)
 
     # ---------------------------------------------------
-    # VALIDATION
+    # VALIDATION (TRAINING ONLY)
     # ---------------------------------------------------
     @classmethod
     def validate_setup(cls):

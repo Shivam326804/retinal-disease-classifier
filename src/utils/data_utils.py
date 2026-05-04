@@ -13,7 +13,6 @@ from .config import Config
 
 logger = setup_logger(__name__)
 
-# ✅ Fix cv2 Pylance issues
 cv2 = cast(Any, cv2)
 
 
@@ -27,7 +26,7 @@ def create_directories(paths: list) -> None:
 
 
 # ---------------------------------------------------
-# LOAD IMAGE
+# LOAD IMAGE (FIXED)
 # ---------------------------------------------------
 
 def load_image(
@@ -46,7 +45,10 @@ def load_image(
 
         img = cv2.resize(img, (target_size[1], target_size[0]))
 
-        img = img.astype(np.float32) / 255.0
+        # ❌ REMOVED: /255 normalization
+        # Let model handle preprocessing
+
+        img = img.astype(np.float32)
 
         return img
 
@@ -64,6 +66,7 @@ def save_image(image: np.ndarray, output_path: str) -> bool:
     try:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
+        # If normalized image, convert back
         if image.max() <= 1.0:
             image = (image * 255).astype(np.uint8)
 

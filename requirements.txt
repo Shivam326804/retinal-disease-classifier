@@ -9,7 +9,7 @@ tensorflow==2.13.0
 opencv-python-headless==4.7.0.72
 Pillow==10.3.0
 
-reportlab==3.6.14
+reportlab==3.6.13
 requests==2.33.1
 pydantic==2.5.0
 tqdm==4.67.3

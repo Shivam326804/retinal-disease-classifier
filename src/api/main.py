@@ -15,7 +15,6 @@ from fastapi import (
     File,
     UploadFile,
     HTTPException,
-    Depends,
     Header
 )
 
@@ -41,7 +40,7 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------
 # CONFIG
 # ---------------------------------------------------
-DEFAULT_API_KEY = os.getenv("DR_API_KEY", "dr_default_key")
+DEFAULT_API_KEY = os.getenv("DR_API_KEY", "dr_ai_secure_key_123")
 APP_VERSION = "3.1.0"
 
 predictor = None
@@ -49,7 +48,7 @@ gradcam = None
 
 
 # ---------------------------------------------------
-# LIFESPAN (RENDER SAFE)
+# LIFESPAN
 # ---------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,32 +56,46 @@ async def lifespan(app: FastAPI):
     global predictor, gradcam
 
     try:
+
         logger.info("🚀 Starting backend...")
 
-        # Create directories
         Config.create_directories()
 
-        # Init DB
+        # -------------------------
+        # DATABASE
+        # -------------------------
         init_db()
         add_api_key(DEFAULT_API_KEY, "admin")
 
-        # Model path
+        # -------------------------
+        # LOAD MODEL
+        # -------------------------
         model_path = Config.get_model_path()
 
         logger.info(f"📦 Loading model: {model_path}")
 
-        predictor = Predictor(model_path=str(model_path))
+        predictor = Predictor(
+            model_path=str(model_path)
+        )
 
-        # GradCAM
+        # -------------------------
+        # LOAD GRADCAM
+        # -------------------------
         try:
+
             gradcam = GradCAMVisualizer(
                 predictor.get_model()
             )
+
             logger.info("✅ GradCAM initialized")
 
         except Exception as e:
+
             gradcam = None
-            logger.warning(f"⚠️ GradCAM disabled: {e}")
+
+            logger.warning(
+                f"⚠️ GradCAM disabled: {e}"
+            )
 
         app.state.predictor = predictor
         app.state.gradcam = gradcam
@@ -96,8 +109,6 @@ async def lifespan(app: FastAPI):
 
         traceback.print_exc()
 
-        # IMPORTANT
-        # do NOT crash Render deployment
         app.state.predictor = None
         app.state.gradcam = None
 
@@ -115,6 +126,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 # ---------------------------------------------------
 # CORS
 # ---------------------------------------------------
@@ -131,16 +143,18 @@ app.add_middleware(
 # AUTH
 # ---------------------------------------------------
 def verify_api_key(
-    x_api_key: Optional[str] = Header(None)
+    x_api_key: Optional[str]
 ):
 
     if x_api_key is None:
+
         raise HTTPException(
             status_code=401,
             detail="API key missing"
         )
 
     if not validate_api_key(x_api_key):
+
         raise HTTPException(
             status_code=403,
             detail="Invalid API key"
@@ -172,6 +186,7 @@ class PredictionResponse(BaseModel):
 def load_image(contents):
 
     try:
+
         image = Image.open(
             io.BytesIO(contents)
         ).convert("RGB")
@@ -179,10 +194,25 @@ def load_image(contents):
         return np.array(image)
 
     except Exception:
+
         raise HTTPException(
             status_code=400,
             detail="Invalid image file"
         )
+
+
+# ---------------------------------------------------
+# ROOT
+# ---------------------------------------------------
+@app.get("/")
+async def root():
+
+    return {
+        "message": "Retinal Disease Classification API",
+        "version": APP_VERSION,
+        "docs": "/docs",
+        "health": "/health"
+    }
 
 
 # ---------------------------------------------------
@@ -212,9 +242,12 @@ async def health_check():
 # ---------------------------------------------------
 @app.get("/usage")
 async def usage(
-    api_key: str = Depends(verify_api_key)
+    x_api_key: str = Header(...)
 ):
-    return get_usage(api_key)
+
+    verify_api_key(x_api_key)
+
+    return get_usage(x_api_key)
 
 
 # ---------------------------------------------------
@@ -226,10 +259,13 @@ async def usage(
 )
 async def predict(
     file: UploadFile = File(...),
-    api_key: str = Depends(verify_api_key)
+    x_api_key: str = Header(...)
 ):
 
+    verify_api_key(x_api_key)
+
     if app.state.predictor is None:
+
         raise HTTPException(
             status_code=503,
             detail="Model not loaded"
@@ -253,7 +289,7 @@ async def predict(
             )
         }
 
-        log_usage(api_key, True)
+        log_usage(x_api_key, True)
 
         return PredictionResponse(
             predicted_disease=label,
@@ -269,7 +305,7 @@ async def predict(
 
         logger.error(str(e))
 
-        log_usage(api_key, False)
+        log_usage(x_api_key, False)
 
         raise HTTPException(
             status_code=500,
@@ -283,10 +319,13 @@ async def predict(
 @app.post("/predict-with-gradcam")
 async def predict_with_gradcam(
     file: UploadFile = File(...),
-    api_key: str = Depends(verify_api_key)
+    x_api_key: str = Header(...)
 ):
 
+    verify_api_key(x_api_key)
+
     if app.state.predictor is None:
+
         raise HTTPException(
             status_code=503,
             detail="Model not loaded"
@@ -362,7 +401,7 @@ async def predict_with_gradcam(
                     f"GradCAM failed: {str(e)}"
                 )
 
-        log_usage(api_key, True)
+        log_usage(x_api_key, True)
 
         return JSONResponse(
             content={
@@ -378,7 +417,7 @@ async def predict_with_gradcam(
 
         logger.error(str(e))
 
-        log_usage(api_key, False)
+        log_usage(x_api_key, False)
 
         raise HTTPException(
             status_code=500,

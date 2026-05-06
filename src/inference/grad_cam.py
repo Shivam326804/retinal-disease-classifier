@@ -34,7 +34,7 @@ class GradCAMVisualizer:
         )
 
         # ---------------------------------------------------
-        # Build classifier head (ROBUST VERSION)
+        # Build classifier head
         # ---------------------------------------------------
         x = self.base_model.output
 
@@ -42,14 +42,18 @@ class GradCAMVisualizer:
         capture = False
 
         for layer in self.model.layers:
+
             if layer == self.base_model:
                 capture = True
                 continue
+
             if capture:
                 head_layers.append(layer)
 
         if len(head_layers) == 0:
-            raise ValueError("❌ Could not extract classifier head")
+            raise ValueError(
+                "❌ Could not extract classifier head"
+            )
 
         inp = tf.keras.Input(shape=x.shape[1:])
         y = inp
@@ -61,10 +65,15 @@ class GradCAMVisualizer:
 
     # ---------------------------------------------------
     def _get_base_model(self):
+
         for layer in self.model.layers:
+
             if "efficientnet" in layer.name.lower():
                 return layer
-        raise ValueError("EfficientNet backbone not found")
+
+        raise ValueError(
+            "EfficientNet backbone not found"
+        )
 
     # ---------------------------------------------------
     def generate_cam(self, image, class_idx=None):
@@ -76,10 +85,17 @@ class GradCAMVisualizer:
 
         with tf.GradientTape() as tape:
 
-            conv_outputs, features = self.backbone_model(image)
+            conv_outputs, features = self.backbone_model(
+                image,
+                training=False
+            )
+
             tape.watch(conv_outputs)
 
-            predictions = self.classifier_model(features)
+            predictions = self.classifier_model(
+                features,
+                training=False
+            )
 
             if class_idx is None:
                 class_idx = tf.argmax(predictions[0])
@@ -89,22 +105,30 @@ class GradCAMVisualizer:
         grads = tape.gradient(loss, conv_outputs)
 
         if grads is None:
-            raise ValueError("❌ Gradients are None — check model graph")
+            raise ValueError(
+                "❌ Gradients are None — check model graph"
+            )
 
         # ---------------------------------------------------
-        # Stable Grad-CAM weights
+        # Grad-CAM weights
         # ---------------------------------------------------
-        weights = tf.reduce_mean(grads, axis=(1, 2))
+        weights = tf.reduce_mean(
+            grads,
+            axis=(1, 2)
+        )
 
         conv_outputs = conv_outputs[0]
         weights = weights[0]
 
-        cam = tf.reduce_sum(conv_outputs * weights, axis=-1)
+        cam = tf.reduce_sum(
+            conv_outputs * weights,
+            axis=-1
+        )
 
         cam = tf.nn.relu(cam)
 
         # ---------------------------------------------------
-        # Safe normalization
+        # Normalize safely
         # ---------------------------------------------------
         cam = cam.numpy()
 
@@ -119,25 +143,54 @@ class GradCAMVisualizer:
         return cam.astype(np.float32)
 
     # ---------------------------------------------------
-    def overlay_heatmap(self, image, heatmap, alpha=0.5):
+    def overlay_heatmap(
+        self,
+        image,
+        heatmap,
+        alpha=0.5
+    ):
 
         if image.ndim == 4:
             image = image[0]
 
+        # Ensure uint8
+        if image.dtype != np.uint8:
+
+            if image.max() <= 1.0:
+                image = (image * 255)
+
+            image = np.clip(
+                image,
+                0,
+                255
+            ).astype(np.uint8)
+
         h, w = image.shape[:2]
 
         # Resize heatmap
-        heatmap = cv2.resize(heatmap, (w, h))
+        heatmap = cv2.resize(
+            heatmap,
+            (w, h)
+        )
 
         heatmap = np.uint8(255 * heatmap)
 
-        heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-        heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
+        heatmap_color = cv2.applyColorMap(
+            heatmap,
+            cv2.COLORMAP_JET
+        )
 
-        # Ensure image dtype
-        if image.max() <= 1.0:
-            image = (image * 255).astype(np.uint8)
+        heatmap_color = cv2.cvtColor(
+            heatmap_color,
+            cv2.COLOR_BGR2RGB
+        )
 
-        overlay = cv2.addWeighted(image, 1 - alpha, heatmap_color, alpha, 0)
+        overlay = cv2.addWeighted(
+            image,
+            1 - alpha,
+            heatmap_color,
+            alpha,
+            0
+        )
 
         return overlay

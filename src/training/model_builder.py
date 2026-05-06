@@ -43,22 +43,19 @@ class ModelBuilder:
         base_model.trainable = False
         self.base_model = base_model
 
-        # ✅ Explicit dtype (prevents deployment issues)
         inputs = layers.Input(shape=self.input_shape, dtype=tf.float32)
 
-        # ✅ Preprocessing INSIDE model (single source of truth)
+        # ✅ Single preprocessing source (VERY IMPORTANT)
         x = applications.efficientnet.preprocess_input(inputs)
 
-        # Keep BN stable
+        # Keep BatchNorm stable during feature extraction
         x = base_model(x, training=False)
-
-        # ✅ Extra regularization (helps generalization)
-        x = layers.Dropout(0.2)(x)
 
         # ---------------------------------------------------
         # HEAD
         # ---------------------------------------------------
         x = layers.GlobalAveragePooling2D()(x)
+
         x = layers.BatchNormalization()(x)
 
         x = layers.Dense(
@@ -81,29 +78,29 @@ class ModelBuilder:
 
         outputs = layers.Dense(self.num_classes, activation="softmax")(x)
 
-        # ✅ Named model (useful for debugging + logs)
         model = models.Model(inputs, outputs, name="retinal_classifier")
 
         logger.info("🔥 Model built (EfficientNetB3 FINAL)")
         return model
 
     # ---------------------------------------------------
-    # FINE TUNE
+    # FINE TUNE (STABLE VERSION)
     # ---------------------------------------------------
-    def fine_tune_model(self, model, unfreeze_layers=180):
+    def fine_tune_model(self, model, unfreeze_layers=150):
 
         logger.info("🔓 Fine-tuning...")
 
-        # Freeze all layers first
+        # Freeze everything first
         for layer in self.base_model.layers:
             layer.trainable = False
 
-        # Unfreeze last N layers (except BatchNorm)
+        # Unfreeze last N layers except BatchNorm
         for layer in self.base_model.layers[-unfreeze_layers:]:
             if not isinstance(layer, tf.keras.layers.BatchNormalization):
                 layer.trainable = True
 
         logger.info(f"✅ Unfroze last {unfreeze_layers} layers")
+
         return model
 
     # ---------------------------------------------------
@@ -130,6 +127,7 @@ class ModelBuilder:
         )
 
         logger.info(f"⚙️ Compiled (lr={lr})")
+
         return model
 
     # ---------------------------------------------------

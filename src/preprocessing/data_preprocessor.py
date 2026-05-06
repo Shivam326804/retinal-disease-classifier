@@ -2,8 +2,9 @@
 FINAL data_preprocessor.py (PRODUCTION READY)
 
 ✔ Consistent with model input size (260x260)
-✔ Correct CLAHE order (before resize)
-✔ Safe retina crop
+✔ CLAHE applied before resize
+✔ Safe retina crop with padding
+✔ Brightness normalization added
 ✔ No normalization (handled by model)
 ✔ Robust dataset handling
 ✔ Debug-friendly logs
@@ -26,7 +27,7 @@ class DataPreprocessor:
         print(f"INFO: Preprocessor initialized ({image_size}x{image_size})")
 
     # ---------------------------------------------------
-    # SAFE RETINA CROP
+    # SAFE RETINA CROP (WITH PADDING)
     # ---------------------------------------------------
     def crop_retina(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -42,6 +43,13 @@ class DataPreprocessor:
         # Avoid aggressive cropping
         if w < 50 or h < 50:
             return img
+
+        # 🔥 Add padding to preserve context
+        pad = 10
+        x = max(0, x - pad)
+        y = max(0, y - pad)
+        w = min(img.shape[1] - x, w + 2 * pad)
+        h = min(img.shape[0] - y, h + 2 * pad)
 
         return img[y:y+h, x:x+w]
 
@@ -70,20 +78,23 @@ class DataPreprocessor:
 
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # 1. Crop retina
+        # 1. Crop retina (with padding)
         img = self.crop_retina(img)
 
         # 2. CLAHE BEFORE resize (important)
         img = self.clahe(img)
 
-        # 3. Resize to model input
+        # 3. Normalize brightness (stabilizes dataset)
+        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+
+        # 4. Resize to model input
         img = cv2.resize(img, (self.image_size, self.image_size))
 
-        # 4. Reject extremely dark images
+        # 5. Reject extremely dark images
         if np.mean(img) < 5:
             return None
 
-        # 5. Return uint8 (model will handle preprocessing)
+        # 6. Ensure uint8 output (model handles preprocessing)
         return img.astype(np.uint8)
 
     # ---------------------------------------------------

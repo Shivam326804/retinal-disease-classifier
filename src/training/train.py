@@ -1,13 +1,3 @@
-"""
-FINAL TRAIN.PY (OPTIMIZED + DEPLOYMENT READY)
-
-✔ Stable pipeline
-✔ Better fine-tuning strategy
-✔ Model checkpoint added
-✔ Improved augmentation
-✔ Deployment-safe saving
-"""
-
 # ---------------------------------------------------
 # SYSTEM
 # ---------------------------------------------------
@@ -33,11 +23,11 @@ Config.set_seed(Config.RANDOM_SEED)
 
 
 # ---------------------------------------------------
-# 🔥 FOCAL LOSS
+# 🔥 STABLE FOCAL LOSS
 # ---------------------------------------------------
 def focal_loss(gamma=2.0):
 
-    class_weights = tf.constant([0.6, 1.8, 0.9, 3.0, 2.5], dtype=tf.float32)
+    class_weights = tf.constant([0.5, 2.5, 1.8, 2.5, 2.2], dtype=tf.float32)
 
     def loss(y_true, y_pred):
         y_true = tf.cast(y_true, tf.int32)
@@ -67,43 +57,44 @@ def load_data():
 
 
 # ---------------------------------------------------
-# CLASS WEIGHTS
+# CLASS WEIGHTS (SAFE VERSION)
 # ---------------------------------------------------
 def get_class_weights():
     weights = {
-        0: 0.6,
-        1: 1.8,
-        2: 0.9,
-        3: 3.0,
-        4: 2.5
+        0: 0.5,
+        1: 2.5,
+        2: 1.8,
+        3: 2.5,
+        4: 2.2
     }
     print("Class Weights:", weights)
     return weights
 
 
 # ---------------------------------------------------
-# DATA PIPELINE (IMPROVED)
+# DATA PIPELINE (STABLE)
 # ---------------------------------------------------
 def create_dataset(X, y, training=True):
 
     def preprocess(x, y):
         x = tf.cast(x, tf.float32)
-        x = tf.image.resize(x, (260, 260))
+        x = tf.image.resize(x, (Config.IMAGE_SIZE, Config.IMAGE_SIZE))
 
         if training:
             x = tf.image.random_flip_left_right(x)
-            x = tf.image.random_brightness(x, 0.1)
 
         return x, y
 
     ds = tf.data.Dataset.from_tensor_slices((X, y))
 
     if training:
-        ds = ds.shuffle(2048)
+        ds = ds.shuffle(min(len(X), 2048))
 
     ds = ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(8)
-    ds = ds.cache().prefetch(tf.data.AUTOTUNE)
+    ds = ds.batch(Config.BATCH_SIZE)
+
+    # ✅ Simple + safe pipeline
+    ds = ds.prefetch(tf.data.AUTOTUNE)
 
     return ds
 
@@ -121,9 +112,9 @@ def train():
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y,
-        test_size=0.2,
+        test_size=Config.VALIDATION_SPLIT,
         stratify=y,
-        random_state=42
+        random_state=Config.RANDOM_SEED
     )
 
     train_ds = create_dataset(X_train, y_train, True)
@@ -132,15 +123,12 @@ def train():
     class_weights = get_class_weights()
 
     builder = ModelBuilder(
-        input_shape=(260, 260, 3),
+        input_shape=(Config.IMAGE_SIZE, Config.IMAGE_SIZE, 3),
         num_classes=Config.NUM_CLASSES
     )
 
     model = builder.build_model()
 
-    # ---------------------------------------------------
-    # CALLBACKS (IMPROVED)
-    # ---------------------------------------------------
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss",
@@ -152,18 +140,12 @@ def train():
             patience=2,
             factor=0.3,
             min_lr=1e-6
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath=os.path.join(Config.MODELS_DIR, "best_model.keras"),
-            monitor="val_accuracy",
-            save_best_only=True,
-            mode="max"
         )
     ]
 
-    # -------------------------
+    # ---------------------------------------------------
     # STAGE 1
-    # -------------------------
+    # ---------------------------------------------------
     print("\n📌 Stage 1: Training\n")
 
     model = builder.compile_model(
@@ -175,22 +157,22 @@ def train():
     model.fit(
         train_ds,
         validation_data=val_ds,
-        epochs=15,
+        epochs=12,
         class_weight=class_weights,
         callbacks=callbacks,
         verbose=2
     )
 
-    # -------------------------
-    # FINE TUNE (FIXED)
-    # -------------------------
+    # ---------------------------------------------------
+    # FINE-TUNE
+    # ---------------------------------------------------
     print("\n🔥 Fine-tuning...\n")
 
-    model = builder.fine_tune_model(model, 120)   # 🔥 reduced from 180
+    model = builder.fine_tune_model(model, 120)
 
     model = builder.compile_model(
         model,
-        lr=1e-5   # 🔥 increased from 2e-6
+        lr=5e-6   # 🔥 safer LR
     )
 
     model.fit(
@@ -202,7 +184,7 @@ def train():
     )
 
     # ---------------------------------------------------
-    # SAVE FINAL MODEL
+    # SAVE (DEPLOY SAFE)
     # ---------------------------------------------------
     save_path = os.path.join(Config.MODELS_DIR, "final_model.keras")
 

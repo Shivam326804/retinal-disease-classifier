@@ -10,7 +10,7 @@ class Config:
     # ---------------------------------------------------
     # BASE PATHS
     # ---------------------------------------------------
-    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    BASE_DIR = Path(os.getenv("BASE_DIR", Path(__file__).resolve().parent.parent.parent))
 
     MODELS_DIR = (BASE_DIR / "models").resolve()
     LOGS_DIR = (BASE_DIR / "logs").resolve()

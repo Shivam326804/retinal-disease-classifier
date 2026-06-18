@@ -118,7 +118,7 @@ else:
 # ---------------------------------------------------
 def api_predict(image, api_key):
 
-    _, img_encoded = cv2.imencode(".jpg", image)
+    _, img_encoded = cv2.imencode(".jpg", image) # pyright: ignore[reportAttributeAccessIssue]
 
     files = {
         "file": (
@@ -469,7 +469,7 @@ elif page == "🔍 Prediction":
                                 "age": age,
                                 "gender": gender
                             }
-                        )
+                        ) # pyright: ignore[reportOptionalCall]
 
                     st.success(
                         "✅ Medical report generated successfully"
